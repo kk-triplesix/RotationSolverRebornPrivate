@@ -17,8 +17,8 @@ public sealed class SMN_Dynamic : SummonerRotation
     [RotationConfig(CombatType.PvE, Name = "Auto Addle on raidwide casts")]
     public bool AutoAddle { get; set; } = true;
 
-    [RotationConfig(CombatType.PvE, Name = "Proactive Radiant Aegis on raidwide casts")]
-    public bool ProactiveAegis { get; set; } = true;
+    [RotationConfig(CombatType.PvE, Name = "Smart Radiant Aegis: Use on any incoming damage (raidwide/stack/AoE)")]
+    public bool SmartAegis { get; set; } = true;
 
     [RotationConfig(CombatType.PvE, Name = "Smart Potion (only use during Searing Light)")]
     public bool SmartPotion { get; set; } = true;
@@ -45,18 +45,11 @@ public sealed class SMN_Dynamic : SummonerRotation
     [RotationConfig(CombatType.PvE, Name = "Use Swiftcast on Garuda (Slipstream)")]
     public bool AddSwiftcastOnGaruda { get; set; } = false;
 
-    [RotationConfig(CombatType.PvE, Name = "Use second charge of Radiant Aegis on cooldown")]
-    public bool RadiantOnCooldown { get; set; } = true;
-
-    [RotationConfig(CombatType.PvE, Name = "Use Radiant Aegis on cooldown (spam)")]
-    public bool RadiantOnCooldownSpam { get; set; } = false;
+    [RotationConfig(CombatType.PvE, Name = "Radiant Aegis on cooldown: Use charges freely outside of damage events")]
+    public bool AegisOnCooldown { get; set; } = false;
 
     [RotationConfig(CombatType.PvE, Name = "Smart Ruin IV: Save for movement, prefer Ruin III when stationary")]
     public bool SmartRuinIV { get; set; } = true;
-
-    [Range(0, 2000, ConfigUnitType.None)]
-    [RotationConfig(CombatType.PvE, Name = "Max delay (ms) for big summon before forcing Ruin IV instead of Ruin III")]
-    public int BigSummonDelayThreshold { get; set; } = 500;
 
     [RotationConfig(CombatType.PvE, Name = "Movement Ruin IV: Use Ruin IV instantly when moving in primal phase")]
     public bool MovementRuinIV { get; set; } = true;
@@ -81,15 +74,18 @@ public sealed class SMN_Dynamic : SummonerRotation
     [RotationConfig(CombatType.PvE, Name = "M11S: Always summon Ifrit last during Trophy Weapon phases")]
     public bool M11SIfritLast { get; set; } = true;
 
+    [RotationConfig(CombatType.PvE, Name = "Opener Addle: Use Addle in opener (may miss early raidwides in M9S/M10S/M11S/M12S)")]
+    public bool OpenerAddle { get; set; } = false;
+
+    [Range(3, 15, ConfigUnitType.Seconds)]
+    [RotationConfig(CombatType.PvE, Name = "Opener Addle: Use within first N seconds of combat")]
+    public float OpenerAddleWindow { get; set; } = 10f;
+
     #endregion
 
     #region Helper Properties
 
     private static bool HasFurtherRuin => StatusHelper.PlayerHasStatus(true, StatusID.FurtherRuin_2701);
-    private static bool HasIfritFavor => StatusHelper.PlayerHasStatus(true, StatusID.IfritsFavor);
-    private static bool HasGarudaFavor => StatusHelper.PlayerHasStatus(true, StatusID.GarudasFavor);
-    private static bool HasTitanFavor => StatusHelper.PlayerHasStatus(true, StatusID.TitansFavor);
-    private static bool NoPrimalReady => !IsIfritReady && !IsGarudaReady && !IsTitanReady;
 
     /// <summary>
     /// M12S: Gibt die Restdauer des _Gen_Direction Debuffs (Status ID 3558) zurück.
@@ -254,8 +250,8 @@ public sealed class SMN_Dynamic : SummonerRotation
             }
         }
 
-        // Radiant Aegis: Schild vor Raidwide
-        if (ProactiveAegis && !IsLastAction(false, RadiantAegisPvE) && RadiantAegisPvE.CanUse(out act, usedUp: true))
+        // Radiant Aegis: Schild bei jeder Art von eingehendem Schaden
+        if (SmartAegis && !IsLastAction(false, RadiantAegisPvE) && RadiantAegisPvE.CanUse(out act, usedUp: true))
         {
             return true;
         }
@@ -272,9 +268,16 @@ public sealed class SMN_Dynamic : SummonerRotation
         if (ShouldPauseForDirection())
             return base.GeneralAbility(nextGCD, out act);
 
-        if (StatusHelper.PlayerWillStatusEndGCD(3, 0, true, StatusID.RefulgentLux))
+        // Lux Solaris: Am Ende der Big Summon Phase nutzen (nach letztem Umbral Impulse),
+        // nicht sofort — so wird der oGCD-Slot nicht verschwendet wenn wichtigere Weaves anstehen.
+        // Fallback: feuert trotzdem wenn RefulgentLux bald ausläuft (≤2 GCDs).
+        if (LuxSolarisPvE.CanUse(out act))
         {
-            if (LuxSolarisPvE.CanUse(out act))
+            bool bigSummonEnding = (InBahamut || InPhoenix || InSolarBahamut) && SummonTime <= GCDTime(1) + 0.5f;
+            bool statusExpiring = StatusHelper.PlayerWillStatusEndGCD(2, 0, true, StatusID.RefulgentLux);
+            bool notInBigSummon = !InBahamut && !InPhoenix && !InSolarBahamut;
+
+            if (bigSummonEnding || statusExpiring || notInBigSummon)
             {
                 return true;
             }
@@ -312,23 +315,11 @@ public sealed class SMN_Dynamic : SummonerRotation
             }
         }
 
-        if (RadiantAegisPvE.Cooldown.CurrentCharges > 0 && !IsLastAction(false, RadiantAegisPvE) && InCombat)
+        // Radiant Aegis on cooldown: Charges frei nutzen wenn kein Schaden ansteht
+        if (AegisOnCooldown && InCombat && !IsLastAction(false, RadiantAegisPvE)
+            && RadiantAegisPvE.CanUse(out act, usedUp: true))
         {
-            if (RadiantOnCooldown && (RadiantAegisPvE.Cooldown.CurrentCharges == 2 || (RadiantAegisPvE.Cooldown.CurrentCharges == 1 && RadiantAegisPvE.Cooldown.WillHaveXChargesGCD(2, 1, 0))))
-            {
-                if (RadiantAegisPvE.CanUse(out act))
-                {
-                    return true;
-                }
-            }
-
-            if (RadiantOnCooldownSpam)
-            {
-                if (RadiantAegisPvE.CanUse(out act))
-                {
-                    return true;
-                }
-            }
+            return true;
         }
 
         return base.GeneralAbility(nextGCD, out act);
@@ -346,6 +337,17 @@ public sealed class SMN_Dynamic : SummonerRotation
         if (burstInSolar)
         {
             if (SearingLightPvE.CanUse(out act))
+            {
+                return true;
+            }
+        }
+
+        // Punkt 4: Opener Addle - im Opener als oGCD-Weave während Big Summon
+        // Spieler entscheidet per Config ob Opener Addle sinnvoll ist (fight-abhängig)
+        if (OpenerAddle && inBigInvocation && CombatElapsedLess(OpenerAddleWindow)
+            && HostileTarget != null && !HostileTarget.HasStatus(false, StatusID.Addle))
+        {
+            if (AddlePvE.CanUse(out act))
             {
                 return true;
             }
@@ -467,8 +469,16 @@ public sealed class SMN_Dynamic : SummonerRotation
             }
         }
 
+        // Punkt 5+6: Necrotize/Fester aggressiver ausgeben
+        // FFLogs: Top-Spieler double-weaven 2x Necrotize nach Energy Drain in jedem Big Summon,
+        // nicht nur in Solar Bahamut. Stacks sofort verbrauchen wenn in Big Summon Phase.
         if (NecrotizePvE.CanUse(out act))
         {
+            // Während Big Summon: immer sofort ausgeben (double-weave mit anderen oGCDs)
+            if (inBigInvocation)
+            {
+                return true;
+            }
             if ((inSolarUnique && HasSearingLight) || !SearingLightPvE.EnoughLevel)
             {
                 return true;
@@ -485,6 +495,10 @@ public sealed class SMN_Dynamic : SummonerRotation
 
         if (FesterPvE.CanUse(out act))
         {
+            if (inBigInvocation)
+            {
+                return true;
+            }
             if ((inSolarUnique && HasSearingLight) || !SearingLightPvE.EnoughLevel)
             {
                 return true;
@@ -530,7 +544,7 @@ public sealed class SMN_Dynamic : SummonerRotation
             }
 
             // Radiant Aegis: Schild aktivieren bevor der Schaden eintrifft
-            if (ProactiveAegis && !IsLastAction(false, RadiantAegisPvE) && RadiantAegisPvE.CanUse(out act))
+            if (SmartAegis && !IsLastAction(false, RadiantAegisPvE) && RadiantAegisPvE.CanUse(out act, usedUp: true))
             {
                 return true;
             }
@@ -604,26 +618,9 @@ public sealed class SMN_Dynamic : SummonerRotation
         }
 
         // Big summon phase (Bahamut/Phoenix/Solar Bahamut)
-        // Opener: 2x Ruin III vor dem allerersten Big Summon (nur ganz am Kampfanfang)
-        bool isOpener = CombatElapsedLessGCD(2) && !NoPrimalReady;
-        if (isOpener)
+        // FFLogs-Analyse: Alle Top-Spieler gehen direkt 1x Ruin III (Precast) → Solar Bahamut.
+        // Kein zusätzlicher Ruin III Filler vor dem ersten Big Summon.
         {
-            // Noch im Opener, erst Ruin III füllen bevor Big Summon kommt
-            // (Ruin III wird weiter unten in der GCD-Chain gecasted)
-        }
-        else
-        {
-            // Ruin IV vor Big Summon aufbrauchen wenn Big Summon bald bereit
-            if (HasFurtherRuin && NoPrimalReady && SummonTimeEndAfterGCD() && AttunmentTimeEndAfterGCD())
-            {
-                float bigSummonCD = BigSummonCooldownRemain();
-                // Big Summon kommt in ~1 GCD → erst Ruin IV verbrauchen (instant), dann Big Summon
-                if (bigSummonCD > 0 && bigSummonCD <= GCDTime(1) + 0.5f)
-                {
-                    if (RuinIvPvE.CanUse(out act, skipAoeCheck: true)) return true;
-                }
-            }
-
             if (SummonBahamutPvE.CanUse(out act))
             {
                 return true;
@@ -716,22 +713,21 @@ public sealed class SMN_Dynamic : SummonerRotation
         if (AstralImpulsePvE.CanUse(out act)) return true;
 
         // Smart Ruin IV Logik: Ruin III vs Ruin IV Entscheidung
+        // FFLogs-Analyse: Top-Spieler nutzen Ruin IV opportunistisch bei Bewegung,
+        // nicht als erzwungenen Dump vor Big Summon. Ruin III wird bei Stillstand bevorzugt.
         if (!InBahamut && !InPhoenix && !InSolarBahamut && SummonTimeEndAfterGCD() && AttunmentTimeEndAfterGCD())
         {
             if (SmartRuinIV && HasFurtherRuin)
             {
-                float bigSummonRemain = BigSummonCooldownRemain();
-                float threshold = BigSummonDelayThreshold / 1000f;
-                bool bigSummonSoon = bigSummonRemain <= GCDTime(1) + threshold && NoPrimalReady;
-                bool needInstant = IsMoving || bigSummonSoon;
+                bool needInstant = IsMoving;
 
-                // BossMod SpecialMode: NoMovement → Casts OK, Freezing → Instants
+                // BossMod SpecialMode: NoMovement → Casts OK, Freezing/Pyretic → Instants
                 if (UseSpecialMode && UseBossModIPC && BossModHints_IPCSubscriber.IsEnabled)
                 {
                     try
                     {
                         var mode = BossModHints_IPCSubscriber.Hints_SpecialMode?.Invoke();
-                        if (mode == "NoMovement") needInstant = bigSummonSoon; // Nur BigSummon-Timing zählt
+                        if (mode == "NoMovement") needInstant = false;
                         else if (mode == "Freezing" || mode == "Pyretic") needInstant = true;
                     }
                     catch { }
@@ -743,6 +739,7 @@ public sealed class SMN_Dynamic : SummonerRotation
                 }
                 else
                 {
+                    // Stationary: Ruin III bevorzugen (höherer Cast-Value), Ruin IV als Fallback
                     if (RuinIiiPvE.EnoughLevel && RuinIiiPvE.CanUse(out act)) return true;
                     if (!RuinIiiPvE.Info.EnoughLevelAndQuest() && RuinIiPvE.EnoughLevel && RuinIiPvE.CanUse(out act)) return true;
                     if (!RuinIiPvE.Info.EnoughLevelAndQuest() && RuinPvE.CanUse(out act)) return true;
@@ -937,27 +934,6 @@ public sealed class SMN_Dynamic : SummonerRotation
                 return true;
         }
         return false;
-    }
-
-    #endregion
-
-    #region Big Summon Helpers
-
-    /// <summary>
-    /// Gibt die verbleibende Cooldown-Zeit bis zur nächsten großen Beschwörung zurück.
-    /// Prüft Bahamut, Phoenix und Solar Bahamut und gibt die kürzeste Zeit zurück.
-    /// </summary>
-    private float BigSummonCooldownRemain()
-    {
-        if (SummonBahamutPvE.EnoughLevel)
-        {
-            return SummonBahamutPvE.Cooldown.RecastTimeRemainOneCharge;
-        }
-        if (DreadwyrmTrancePvE.EnoughLevel)
-        {
-            return DreadwyrmTrancePvE.Cooldown.RecastTimeRemainOneCharge;
-        }
-        return float.MaxValue;
     }
 
     #endregion
