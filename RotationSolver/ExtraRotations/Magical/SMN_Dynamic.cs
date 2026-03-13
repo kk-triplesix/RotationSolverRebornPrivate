@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using RotationSolver.IPC;
 
 namespace RotationSolver.ExtraRotations.Magical;
@@ -57,12 +58,25 @@ public sealed class SMN_Dynamic : SummonerRotation
     [RotationConfig(CombatType.PvE, Name = "Max delay (ms) for big summon before forcing Ruin IV instead of Ruin III")]
     public int BigSummonDelayThreshold { get; set; } = 500;
 
+    [RotationConfig(CombatType.PvE, Name = "Movement Ruin IV: Use Ruin IV instantly when moving in primal phase")]
+    public bool MovementRuinIV { get; set; } = true;
+
     [RotationConfig(CombatType.PvE, Name = "Use BossMod IPC for raidwide/stack detection (requires BossModReborn)")]
     public bool UseBossModIPC { get; set; } = true;
 
     [Range(1, 10, ConfigUnitType.Seconds)]
     [RotationConfig(CombatType.PvE, Name = "BossMod lookahead (seconds) for raidwide/stack prediction")]
     public float BossModLookahead { get; set; } = 5f;
+
+    [RotationConfig(CombatType.PvE, Name = "BossMod SpecialMode: Adapt rotation to Pyretic/NoMovement/Freezing mechanics")]
+    public bool UseSpecialMode { get; set; } = true;
+
+    [RotationConfig(CombatType.PvE, Name = "M12S: Pause rotation during Directed Grotesquerie (prevent facing changes)")]
+    public bool PauseOnDirectedGrotesquerie { get; set; } = true;
+
+    [Range(0.5f, 5f, ConfigUnitType.Seconds)]
+    [RotationConfig(CombatType.PvE, Name = "M12S: Seconds before mechanic resolves to pause rotation")]
+    public float DirectionPauseLeadTime { get; set; } = 1.5f;
 
     #endregion
 
@@ -73,6 +87,85 @@ public sealed class SMN_Dynamic : SummonerRotation
     private static bool HasGarudaFavor => StatusHelper.PlayerHasStatus(true, StatusID.GarudasFavor);
     private static bool HasTitanFavor => StatusHelper.PlayerHasStatus(true, StatusID.TitansFavor);
     private static bool NoPrimalReady => !IsIfritReady && !IsGarudaReady && !IsTitanReady;
+
+    /// <summary>
+    /// M12S: Gibt die Restdauer des _Gen_Direction Debuffs (Status ID 3558) zurück.
+    /// Returns 0 wenn der Debuff nicht vorhanden ist.
+    /// </summary>
+    private static float DirectedGrotesquerieRemaining
+    {
+        get
+        {
+            var statusList = Player?.StatusList;
+            if (statusList == null) return 0f;
+            foreach (var status in statusList)
+            {
+                if (status.StatusId == 3558) return status.RemainingTime;
+            }
+            return 0f;
+        }
+    }
+
+    /// <summary>
+    /// M12S: Prüft ob die Rotation wegen Directed Grotesquerie pausiert werden soll.
+    /// Pausiert erst wenn die Restdauer unter DirectionPauseLeadTime fällt (default 1.5s).
+    /// - Wenn BossMod ForbiddenDirections verfügbar: Smart-Modus, nur pausieren wenn Zielrichtung verboten ist
+    /// - Ohne BossMod: Blanket-Pause wenn Debuff kurz vor Ablauf
+    /// </summary>
+    private bool ShouldPauseForDirection()
+    {
+        if (!PauseOnDirectedGrotesquerie)
+            return false;
+
+        var remaining = DirectedGrotesquerieRemaining;
+        if (remaining <= 0f || remaining > DirectionPauseLeadTime)
+            return false;
+
+        // Debuff läuft bald ab - prüfe ob BossMod ForbiddenDirections Smart-Modus möglich
+        if (UseBossModIPC && BossModHints_IPCSubscriber.IsEnabled)
+        {
+            try
+            {
+                var json = BossModHints_IPCSubscriber.Hints_ForbiddenDirections?.Invoke();
+                if (!string.IsNullOrEmpty(json) && json != "[]" && HostileTarget != null && Player != null)
+                {
+                    // Richtung vom Spieler zum Ziel berechnen (BossMod-Konvention: Atan2(dx, dz))
+                    var dx = HostileTarget.Position.X - Player.Position.X;
+                    var dz = HostileTarget.Position.Z - Player.Position.Z;
+                    var dirToTarget = MathF.Atan2(dx, dz);
+
+                    // Prüfe ob diese Richtung in einem verbotenen Bogen liegt
+                    return IsDirectionForbidden(dirToTarget, json);
+                }
+            }
+            catch
+            {
+                // IPC-Fehler: Fallback auf Blanket-Pause
+            }
+        }
+
+        // Fallback: komplett pausieren wenn Debuff kurz vor Ablauf
+        return true;
+    }
+
+    /// <summary>
+    /// Prüft ob eine Blickrichtung (in Radians) in einem der verbotenen Bögen liegt.
+    /// </summary>
+    private static bool IsDirectionForbidden(float directionRad, string forbiddenDirectionsJson)
+    {
+        using var doc = JsonDocument.Parse(forbiddenDirectionsJson);
+        foreach (var entry in doc.RootElement.EnumerateArray())
+        {
+            var center = entry.GetProperty("Center").GetSingle();
+            var halfWidth = entry.GetProperty("HalfWidth").GetSingle();
+
+            // Differenz normalisieren auf [-π, π]
+            var diff = MathF.IEEERemainder(directionRad - center, 2f * MathF.PI);
+            if (MathF.Abs(diff) < halfWidth)
+                return true;
+        }
+        return false;
+    }
 
     #endregion
 
@@ -119,6 +212,9 @@ public sealed class SMN_Dynamic : SummonerRotation
     [RotationDesc(ActionID.AddlePvE, ActionID.RadiantAegisPvE)]
     protected override bool DefenseAreaAbility(IAction nextGCD, out IAction? act)
     {
+        if (ShouldPauseForDirection())
+            return base.DefenseAreaAbility(nextGCD, out act);
+
         // Addle: nur wenn Ziel castet und noch kein Addle hat
         if (AutoAddle && ShouldUseAddle())
         {
@@ -143,6 +239,9 @@ public sealed class SMN_Dynamic : SummonerRotation
     [RotationDesc(ActionID.LuxSolarisPvE)]
     protected override bool GeneralAbility(IAction nextGCD, out IAction? act)
     {
+        if (ShouldPauseForDirection())
+            return base.GeneralAbility(nextGCD, out act);
+
         if (StatusHelper.PlayerWillStatusEndGCD(3, 0, true, StatusID.RefulgentLux))
         {
             if (LuxSolarisPvE.CanUse(out act))
@@ -207,6 +306,9 @@ public sealed class SMN_Dynamic : SummonerRotation
 
     protected override bool AttackAbility(IAction nextGCD, out IAction? act)
     {
+        if (ShouldPauseForDirection())
+            return base.AttackAbility(nextGCD, out act);
+
         bool inBigInvocation = !SummonBahamutPvE.EnoughLevel || InBahamut || InPhoenix || InSolarBahamut;
         bool inSolarUnique = DataCenter.PlayerSyncedLevel() == 100 ? !InBahamut && !InPhoenix && InSolarBahamut : InBahamut && !InPhoenix;
         bool burstInSolar = (SummonSolarBahamutPvE.EnoughLevel && InSolarBahamut) || (!SummonSolarBahamutPvE.EnoughLevel && InBahamut) || !SummonBahamutPvE.EnoughLevel;
@@ -379,6 +481,9 @@ public sealed class SMN_Dynamic : SummonerRotation
 
     protected override bool EmergencyAbility(IAction nextGCD, out IAction? act)
     {
+        if (ShouldPauseForDirection())
+            return base.EmergencyAbility(nextGCD, out act);
+
         // Höchste Priorität: Raidwide/Stack erkannt → Addle + Schild SOFORT
         // EmergencyAbility wird VOR allen anderen oGCDs aufgerufen (höchste Priorität im Framework)
         bool damageImminent = IsDamageImminent();
@@ -455,6 +560,13 @@ public sealed class SMN_Dynamic : SummonerRotation
 
     protected override bool GeneralGCD(out IAction? act)
     {
+        // M12S: Rotation pausieren wenn Directed Grotesquerie aktiv
+        if (ShouldPauseForDirection())
+        {
+            act = null;
+            return false;
+        }
+
         // Summon Carbuncle if needed
         if (SummonCarbunclePvE.CanUse(out act))
         {
@@ -520,7 +632,7 @@ public sealed class SMN_Dynamic : SummonerRotation
         if (!InBahamut && !InPhoenix && !InSolarBahamut)
         {
             // Moving: Ruin IV sofort nutzen (instant cast, perfekt für Movement)
-            if (IsMoving && HasFurtherRuin && SummonTimeEndAfterGCD() && AttunmentTimeEndAfterGCD()
+            if (MovementRuinIV && IsMoving && HasFurtherRuin && SummonTimeEndAfterGCD() && AttunmentTimeEndAfterGCD()
                 && RuinIvPvE.CanUse(out act, skipAoeCheck: true))
             {
                 return true;
@@ -557,25 +669,32 @@ public sealed class SMN_Dynamic : SummonerRotation
         {
             if (SmartRuinIV && HasFurtherRuin)
             {
-                // Prüfe ob genug Zeit für Ruin III + GCD bis große Beschwörung bereit ist
-                // Ruin III hat ~2.5s Cast. Wenn Bahamut/etc. in weniger als 1 GCD bereit ist,
-                // würde Ruin III die große Beschwörung zu lange verzögern → Ruin IV nehmen
                 float bigSummonRemain = BigSummonCooldownRemain();
                 float threshold = BigSummonDelayThreshold / 1000f;
                 bool bigSummonSoon = bigSummonRemain <= GCDTime(1) + threshold && NoPrimalReady;
+                bool needInstant = IsMoving || bigSummonSoon;
 
-                if (IsMoving || bigSummonSoon)
+                // BossMod SpecialMode: NoMovement → Casts OK, Freezing → Instants
+                if (UseSpecialMode && UseBossModIPC && BossModHints_IPCSubscriber.IsEnabled)
                 {
-                    // Ruin IV: instant, keine Verzögerung der großen Beschwörung
+                    try
+                    {
+                        var mode = BossModHints_IPCSubscriber.Hints_SpecialMode?.Invoke();
+                        if (mode == "NoMovement") needInstant = bigSummonSoon; // Nur BigSummon-Timing zählt
+                        else if (mode == "Freezing" || mode == "Pyretic") needInstant = true;
+                    }
+                    catch { }
+                }
+
+                if (needInstant)
+                {
                     if (RuinIvPvE.CanUse(out act, skipAoeCheck: true)) return true;
                 }
                 else
                 {
-                    // Genug Zeit: Ruin III bevorzugen, Ruin IV aufsparen
                     if (RuinIiiPvE.EnoughLevel && RuinIiiPvE.CanUse(out act)) return true;
                     if (!RuinIiiPvE.Info.EnoughLevelAndQuest() && RuinIiPvE.EnoughLevel && RuinIiPvE.CanUse(out act)) return true;
                     if (!RuinIiPvE.Info.EnoughLevelAndQuest() && RuinPvE.CanUse(out act)) return true;
-                    // Fallback auf Ruin IV wenn Ruin III nicht verfügbar
                     if (RuinIvPvE.CanUse(out act, skipAoeCheck: true)) return true;
                 }
             }
@@ -599,23 +718,57 @@ public sealed class SMN_Dynamic : SummonerRotation
     #region Dynamic Primal Selection
 
     /// <summary>
-    /// Dynamische Egi-Auswahl: Vermeidet Ifrit (Cast-Zeiten) bei Bewegung.
-    /// Priorisiert Titan (Instant) und Garuda (1 Cast + Instants) wenn in Bewegung.
+    /// Dynamische Egi-Auswahl basierend auf Bewegung und BossMod SpecialMode.
+    /// Pyretic/NoMovement → Casts bevorzugen (Ifrit), Freezing → Instants (Titan).
     /// </summary>
     private bool DynamicPrimalSelection(out IAction? act)
     {
         act = null;
+        bool preferInstants = IsMoving;
 
-        if (IsMoving)
+        // BossMod SpecialMode: überschreibt Bewegungserkennung
+        if (UseSpecialMode && UseBossModIPC && BossModHints_IPCSubscriber.IsEnabled)
         {
-            // Moving: Titan first (all instant), then Garuda (mostly instant), Ifrit last
+            try
+            {
+                var mode = BossModHints_IPCSubscriber.Hints_SpecialMode?.Invoke();
+                if (mode != null)
+                {
+                    switch (mode)
+                    {
+                        case "Pyretic":
+                            // Pyretic: keine Aktionen erlaubt → base handling, aber falls doch:
+                            // Instants bevorzugen damit wir sofort stoppen können
+                            preferInstants = true;
+                            break;
+                        case "NoMovement":
+                            // Kann nicht bewegen → Casts sind kein Problem, Ifrit bevorzugen
+                            preferInstants = false;
+                            break;
+                        case "Freezing":
+                            // Muss sich bewegen → nur Instants
+                            preferInstants = true;
+                            break;
+                        // "Normal", "Misdirection" → Bewegungserkennung beibehalten
+                    }
+                }
+            }
+            catch
+            {
+                // IPC-Fehler: Fallback auf Bewegungserkennung
+            }
+        }
+
+        if (preferInstants)
+        {
+            // Instants: Titan first (all instant), then Garuda (mostly instant), Ifrit last
             if (TitanTime(out act)) return true;
             if (GarudaTime(out act)) return true;
             if (IfritTime(out act)) return true;
         }
         else
         {
-            // Stationary: Ifrit first (highest potency with casts), then Titan, then Garuda
+            // Casts OK: Ifrit first (highest potency with casts), then Titan, then Garuda
             if (IfritTime(out act)) return true;
             if (TitanTime(out act)) return true;
             if (GarudaTime(out act)) return true;
