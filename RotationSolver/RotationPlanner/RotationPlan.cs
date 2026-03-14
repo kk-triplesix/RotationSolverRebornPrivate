@@ -31,8 +31,23 @@ public class PlannedAction
     [JsonProperty("duration")]
     public float Duration { get; set; }
 
+    /// <summary>
+    /// Cast time of this action in seconds (0 = instant).
+    /// Used to show when to START pressing the button.
+    /// </summary>
+    [JsonProperty("castTime")]
+    public float CastTime { get; set; }
+
     [JsonProperty("comment")]
     public string? Comment { get; set; }
+
+    /// <summary>
+    /// The combat time at which this action's effect resolves.
+    /// For instant casts: same as CombatTime.
+    /// For casted spells: CombatTime + CastTime.
+    /// </summary>
+    [JsonIgnore]
+    public float EffectTime => CastTime > 0 ? CombatTime + CastTime : CombatTime;
 }
 
 /// <summary>
@@ -110,6 +125,12 @@ public class RotationPlan
 
     [JsonProperty("totalDuration")]
     public float TotalDuration { get; set; }
+
+    /// <summary>
+    /// Seconds before pull shown on timeline (default 5s for prepull actions)
+    /// </summary>
+    [JsonProperty("precastTime")]
+    public float PrecastTime { get; set; } = 5f;
 
     [JsonProperty("actions")]
     public List<PlannedAction> Actions { get; set; } = [];

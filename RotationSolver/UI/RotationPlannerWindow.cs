@@ -53,6 +53,13 @@ internal class RotationPlannerWindow : Window
     private string _draggingActionName = "";
     private bool _draggingIsGCD;
 
+    // Precast colors
+    private static readonly Vector4 PrecastZoneColor = new(0.15f, 0.12f, 0.20f, 0.50f);
+    private static readonly Vector4 PullMarkerColor = new(0.20f, 1.0f, 0.30f, 0.90f);
+    private static readonly Vector4 CastBarColor = new(1.0f, 0.85f, 0.30f, 0.60f);
+    private static readonly Vector4 CastBarBorderColor = new(1.0f, 0.85f, 0.30f, 0.90f);
+    private static readonly Vector4 MechanicLinkColor = new(1.0f, 0.50f, 0.30f, 0.50f);
+
     // Mechanic colors
     private static readonly Vector4 RaidwideColor = new(0.90f, 0.30f, 0.30f, 0.70f);
     private static readonly Vector4 TankbusterColor = new(0.95f, 0.60f, 0.20f, 0.70f);
@@ -289,6 +296,18 @@ internal class RotationPlannerWindow : Window
         if (!bossModAvailable) ImGui.EndDisabled();
 
         ImGui.SameLine(0, 16);
+        ImGui.Text("Precast:");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(60);
+        float precast = _currentPlan.PrecastTime;
+        if (ImGui.DragFloat("##Precast", ref precast, 0.5f, 0f, 30f, "%.0fs"))
+        {
+            _currentPlan.PrecastTime = Math.Max(0, precast);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Prepull-Zeit: Sekunden vor dem Pull\nfuer Precast-Skills (z.B. Countdown)");
+
+        ImGui.SameLine(0, 16);
         ImGui.Text("Zoom:");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(100);
@@ -448,8 +467,9 @@ internal class RotationPlannerWindow : Window
         var canvasSize = new Vector2(width, height);
         var drawList = ImGui.GetWindowDrawList();
 
+        float precast = _currentPlan.PrecastTime;
         float totalSeconds = Math.Max(_currentPlan.TotalDuration, 600f);
-        float totalWidth = totalSeconds * _pixelsPerSecond;
+        float totalWidth = (totalSeconds + precast) * _pixelsPerSecond;
 
         // InvisibleButton FIRST as base interactable (drop target + input)
         ImGui.SetCursorScreenPos(canvasPos);
@@ -459,11 +479,12 @@ internal class RotationPlannerWindow : Window
         // Manual drop detection (cross-window drag)
         if (_isDraggingFromPalette && canvasHovered && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
         {
-            float dropTime = (ImGui.GetMousePos().X - canvasPos.X + _scrollX) / _pixelsPerSecond;
-            dropTime = Math.Max(0, dropTime);
+            float dropTime = XToTime(canvasPos.X, ImGui.GetMousePos().X);
+            dropTime = Math.Max(-precast, dropTime);
 
             if (_draggingIsGCD)
             {
+                // Prepull GCDs snap to GCD grid relative to t=0
                 dropTime = SnapToGCD(dropTime);
             }
             else
@@ -479,11 +500,14 @@ internal class RotationPlannerWindow : Window
         HandleCanvasInput(canvasPos, canvasSize, totalWidth, canvasHovered);
 
         // Draw layers on top via draw list
+        DrawPrecastZone(drawList, canvasPos, canvasSize);
         DrawGrid(drawList, canvasPos, canvasSize, totalSeconds);
+        DrawPullMarker(drawList, canvasPos, canvasSize);
         DrawPhaseSeparators(drawList, canvasPos, canvasSize);
         DrawMechanicLane(drawList, canvasPos, canvasSize);
         DrawGCDLane(drawList, canvasPos, canvasSize);
         DrawOGCDLane(drawList, canvasPos, canvasSize);
+        DrawMechanicLinks(drawList, canvasPos, canvasSize);
         DrawCurrentTimeLine(drawList, canvasPos, canvasSize);
         DrawBossDeathMarker(drawList, canvasPos, canvasSize);
 
@@ -506,8 +530,9 @@ internal class RotationPlannerWindow : Window
             _pixelsPerSecond = Math.Clamp(_pixelsPerSecond + io.MouseWheel * zoomStep, MinPPS, MaxPPS);
 
             // Adjust scroll to keep mouse position stable
-            float mouseTime = (mousePos.X - pos.X + _scrollX) / oldPPS;
-            _scrollX = mouseTime * _pixelsPerSecond - (mousePos.X - pos.X);
+            float precast = _currentPlan.PrecastTime;
+            float mouseTime = (mousePos.X - pos.X + _scrollX) / oldPPS - precast;
+            _scrollX = (mouseTime + precast) * _pixelsPerSecond - (mousePos.X - pos.X);
         }
 
         // Middle mouse pan
@@ -533,14 +558,14 @@ internal class RotationPlannerWindow : Window
         // Click to select/deselect actions
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
-            float clickTime = (mousePos.X - pos.X + _scrollX) / _pixelsPerSecond;
+            float clickTime = XToTime(pos.X, mousePos.X);
             _selectedActionId = FindActionAtTime(clickTime, mousePos.Y - pos.Y);
         }
 
         // Right-click context menu
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Right))
         {
-            float clickTime = (mousePos.X - pos.X + _scrollX) / _pixelsPerSecond;
+            float clickTime = XToTime(pos.X, mousePos.X);
             var clickedAction = FindActionAtTime(clickTime, mousePos.Y - pos.Y);
             if (clickedAction.HasValue)
             {
@@ -561,20 +586,39 @@ internal class RotationPlannerWindow : Window
                     RSRStyle.ThemedSeparator();
 
                     float time = action.CombatTime;
+                    float precast = _currentPlan.PrecastTime;
                     ImGui.SetNextItemWidth(100);
-                    if (ImGui.DragFloat("Time (s)", ref time, 0.1f, 0, _currentPlan.TotalDuration))
+                    if (ImGui.DragFloat("Zeit (s)", ref time, 0.1f, -precast, _currentPlan.TotalDuration))
                     {
                         action.CombatTime = time;
                     }
 
+                    float castTime = action.CastTime;
+                    ImGui.SetNextItemWidth(100);
+                    if (ImGui.DragFloat("Castzeit (s)", ref castTime, 0.1f, 0, 5f))
+                    {
+                        action.CastTime = castTime;
+                    }
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip("Castzeit des Skills. Bestimmt wann der\nSkill aktiviert werden muss (vorher druecken).");
+
+                    // Show nearest mechanic info
+                    var nearestMech = FindNearestMechanic(action.EffectTime);
+                    if (nearestMech != null)
+                    {
+                        float delta = nearestMech.CombatTime - action.EffectTime;
+                        ImGui.TextColored(GetMechanicColor(nearestMech.Type),
+                            $"{delta:F1}s vor {nearestMech.Name}");
+                    }
+
                     string comment = action.Comment ?? "";
                     ImGui.SetNextItemWidth(150);
-                    if (ImGui.InputText("Comment", ref comment, 128))
+                    if (ImGui.InputText("Kommentar", ref comment, 128))
                     {
                         action.Comment = string.IsNullOrEmpty(comment) ? null : comment;
                     }
 
-                    if (ImGui.MenuItem("Delete"))
+                    if (ImGui.MenuItem("Loeschen"))
                     {
                         _currentPlan.Actions.RemoveAll(a => a.Id == _selectedActionId.Value);
                         _selectedActionId = null;
@@ -619,6 +663,16 @@ internal class RotationPlannerWindow : Window
         bool isGCD = baseAction.Info.IsRealGCD;
         float gcd = ActionTimelineManager.Instance.GCD;
 
+        // Get cast time from action info (BaseCastTime is in 100ms units in Lumina)
+        float castTime = 0f;
+        try
+        {
+            var castTime100ms = baseAction.Info.CastTime;
+            if (castTime100ms > 0)
+                castTime = castTime100ms;
+        }
+        catch { /* fallback to 0 */ }
+
         var planned = new PlannedAction
         {
             ActionId = actionId,
@@ -626,7 +680,8 @@ internal class RotationPlannerWindow : Window
             IconId = baseAction.IconID,
             Type = isGCD ? TimelineItemType.GCD : TimelineItemType.OGCD,
             CombatTime = combatTime,
-            Duration = isGCD ? gcd : 0.6f // GCD or animation lock
+            Duration = isGCD ? gcd : 0.6f,
+            CastTime = castTime
         };
 
         _currentPlan.Actions.Add(planned);
@@ -637,8 +692,50 @@ internal class RotationPlannerWindow : Window
 
     #region Drawing
 
+    private void DrawPrecastZone(ImDrawListPtr drawList, Vector2 pos, Vector2 size)
+    {
+        float precast = _currentPlan.PrecastTime;
+        if (precast <= 0) return;
+
+        float x0 = TimeToX(pos.X, -precast);
+        float x1 = TimeToX(pos.X, 0);
+
+        // Clamp to canvas
+        float drawX0 = Math.Max(x0, pos.X);
+        float drawX1 = Math.Min(x1, pos.X + size.X);
+        if (drawX0 >= drawX1) return;
+
+        // Dark overlay for precast zone
+        drawList.AddRectFilled(
+            new Vector2(drawX0, pos.Y),
+            new Vector2(drawX1, pos.Y + size.Y),
+            ImGui.ColorConvertFloat4ToU32(PrecastZoneColor));
+
+        // "PREPULL" label
+        if (x0 >= pos.X)
+        {
+            drawList.AddText(new Vector2(x0 + 4, pos.Y + size.Y - 16),
+                ImGui.ColorConvertFloat4ToU32(RSRStyle.TextDisabled), "PREPULL");
+        }
+    }
+
+    private void DrawPullMarker(ImDrawListPtr drawList, Vector2 pos, Vector2 size)
+    {
+        float x = TimeToX(pos.X, 0);
+        if (x < pos.X || x > pos.X + size.X) return;
+
+        uint pullColor = ImGui.ColorConvertFloat4ToU32(PullMarkerColor);
+
+        // Thick vertical line at t=0
+        drawList.AddLine(new Vector2(x, pos.Y), new Vector2(x, pos.Y + size.Y), pullColor, 3f);
+
+        // "PULL" label
+        drawList.AddText(new Vector2(x + 4, pos.Y + 4), pullColor, "PULL");
+    }
+
     private void DrawGrid(ImDrawListPtr drawList, Vector2 pos, Vector2 size, float totalSeconds)
     {
+        float precast = _currentPlan.PrecastTime;
         uint gridColor = RSRStyle.SeparatorU32;
         uint gridColorMinor = ImGui.ColorConvertFloat4ToU32(RSRStyle.SeparatorColor with { W = 0.15f });
         uint textColor = ImGui.ColorConvertFloat4ToU32(RSRStyle.TextDisabled);
@@ -650,29 +747,41 @@ internal class RotationPlannerWindow : Window
             : _pixelsPerSecond >= 8 ? 30
             : 60;
 
+        float startTime = -precast;
+
         // Minor grid (1s lines) when zoomed in enough
         if (_pixelsPerSecond >= 30)
         {
-            for (float t = 0; t <= totalSeconds; t += 1f)
+            for (float t = MathF.Ceiling(startTime); t <= totalSeconds; t += 1f)
             {
                 if (t % majorInterval == 0) continue;
-                float x = pos.X + t * _pixelsPerSecond - _scrollX;
+                float x = TimeToX(pos.X, t);
                 if (x < pos.X || x > pos.X + size.X) continue;
                 drawList.AddLine(new Vector2(x, pos.Y), new Vector2(x, pos.Y + size.Y), gridColorMinor);
             }
         }
 
-        // Major grid lines with labels
-        for (float t = 0; t <= totalSeconds; t += majorInterval)
+        // Major grid lines with labels (including negative time)
+        float firstMajor = MathF.Ceiling(startTime / majorInterval) * majorInterval;
+        for (float t = firstMajor; t <= totalSeconds; t += majorInterval)
         {
-            float x = pos.X + t * _pixelsPerSecond - _scrollX;
+            if (MathF.Abs(t) < 0.01f) continue; // Skip t=0, drawn by PullMarker
+            float x = TimeToX(pos.X, t);
             if (x < pos.X || x > pos.X + size.X) continue;
 
             drawList.AddLine(new Vector2(x, pos.Y), new Vector2(x, pos.Y + size.Y), gridColor);
 
-            int minutes = (int)t / 60;
-            int seconds = (int)t % 60;
-            string label = minutes > 0 ? $"{minutes}:{seconds:D2}" : $"{seconds}s";
+            string label;
+            if (t < 0)
+            {
+                label = $"{t:F0}s";
+            }
+            else
+            {
+                int minutes = (int)t / 60;
+                int seconds = (int)t % 60;
+                label = minutes > 0 ? $"{minutes}:{seconds:D2}" : $"{seconds}s";
+            }
             drawList.AddText(new Vector2(x + 2, pos.Y + 2), textColor, label);
         }
     }
@@ -684,7 +793,7 @@ internal class RotationPlannerWindow : Window
 
         foreach (var phase in _currentPlan.Phases)
         {
-            float x = pos.X + phase.StartTime * _pixelsPerSecond - _scrollX;
+            float x = TimeToX(pos.X, phase.StartTime);
             if (x < pos.X || x > pos.X + size.X) continue;
 
             // Dashed line
@@ -714,7 +823,7 @@ internal class RotationPlannerWindow : Window
 
         foreach (var mech in mechanics)
         {
-            float x = pos.X + mech.CombatTime * _pixelsPerSecond - _scrollX;
+            float x = TimeToX(pos.X, mech.CombatTime);
             float w = Math.Max(mech.Duration * _pixelsPerSecond, 6f);
             if (x + w < pos.X || x > pos.X + size.X) continue;
 
@@ -777,8 +886,8 @@ internal class RotationPlannerWindow : Window
             int slotIndex = 0;
             for (float t = 0; t < totalDuration; t += gcd)
             {
-                float x1 = pos.X + t * _pixelsPerSecond - _scrollX;
-                float x2 = pos.X + (t + gcd) * _pixelsPerSecond - _scrollX;
+                float x1 = TimeToX(pos.X, t);
+                float x2 = TimeToX(pos.X, t + gcd);
 
                 // Cull off-screen slots
                 if (x2 < pos.X) { slotIndex++; continue; }
@@ -849,15 +958,54 @@ internal class RotationPlannerWindow : Window
 
     private void DrawActionsInLane(ImDrawListPtr drawList, Vector2 canvasPos, float laneY, float laneHeight, float iconSize, TimelineItemType type)
     {
+        uint castBarU32 = ImGui.ColorConvertFloat4ToU32(CastBarColor);
+        uint castBarBorderU32 = ImGui.ColorConvertFloat4ToU32(CastBarBorderColor);
+
         foreach (var action in _currentPlan.Actions)
         {
             if (action.Type != type) continue;
 
-            float x = canvasPos.X + action.CombatTime * _pixelsPerSecond - _scrollX;
+            float x = TimeToX(canvasPos.X, action.CombatTime);
             if (x + iconSize < canvasPos.X || x > canvasPos.X + ImGui.GetWindowSize().X) continue;
 
             float iconY = laneY + (laneHeight - iconSize) / 2;
             bool isSelected = _selectedActionId == action.Id;
+
+            // Cast bar (extends left from action showing when to start pressing)
+            if (action.CastTime > 0)
+            {
+                float castBarWidth = action.CastTime * _pixelsPerSecond;
+                float castBarX = x - castBarWidth;
+                float castBarY = iconY + iconSize * 0.3f;
+                float castBarH = iconSize * 0.4f;
+
+                // Cast bar fill
+                drawList.AddRectFilled(
+                    new Vector2(castBarX, castBarY),
+                    new Vector2(x, castBarY + castBarH),
+                    castBarU32, 2f);
+
+                // Cast bar border
+                drawList.AddRect(
+                    new Vector2(castBarX, castBarY),
+                    new Vector2(x, castBarY + castBarH),
+                    castBarBorderU32, 2f);
+
+                // "Aktivierung" arrow at cast start
+                drawList.AddTriangleFilled(
+                    new Vector2(castBarX, castBarY - 4),
+                    new Vector2(castBarX + 6, castBarY - 4),
+                    new Vector2(castBarX + 3, castBarY),
+                    castBarBorderU32);
+
+                // Cast time label
+                if (castBarWidth > 30)
+                {
+                    string castLabel = $"{action.CastTime:F1}s";
+                    drawList.AddText(new Vector2(castBarX + 3, castBarY + 1),
+                        ImGui.ColorConvertFloat4ToU32(RSRStyle.TextPrimary), castLabel);
+                }
+            }
 
             // Selection highlight
             if (isSelected)
@@ -866,6 +1014,15 @@ internal class RotationPlannerWindow : Window
                     new Vector2(x - 2, iconY - 2),
                     new Vector2(x + iconSize + 2, iconY + iconSize + 2),
                     RSRStyle.AccentU32, 4f, ImDrawFlags.None, 2f);
+            }
+
+            // Prepull indicator (negative time)
+            if (action.CombatTime < 0)
+            {
+                drawList.AddText(
+                    new Vector2(x, iconY - 12),
+                    ImGui.ColorConvertFloat4ToU32(PullMarkerColor),
+                    $"{action.CombatTime:F1}s");
             }
 
             // Draw icon
@@ -898,16 +1055,90 @@ internal class RotationPlannerWindow : Window
             {
                 ImGui.BeginTooltip();
                 ImGui.Text(action.ActionName);
-                ImGui.Text($"Zeit: {FormatTime(action.CombatTime)}");
+
+                if (action.CombatTime < 0)
+                    ImGui.TextColored(PullMarkerColor, $"Prepull: {action.CombatTime:F1}s");
+                else
+                    ImGui.Text($"Aktivierung: {FormatTime(action.CombatTime)}");
+
+                if (action.CastTime > 0)
+                {
+                    ImGui.TextColored(CastBarColor,
+                        $"Castzeit: {action.CastTime:F1}s (Effekt bei {FormatTime(action.EffectTime)})");
+                }
+
                 if (action.Type == TimelineItemType.GCD)
                 {
                     float gcd = GetCurrentGCD();
                     int slot = (int)MathF.Round(action.CombatTime / gcd) + 1;
-                    ImGui.TextColored(RSRStyle.Accent, $"GCD Slot #{slot}");
+                    if (slot > 0) ImGui.TextColored(RSRStyle.Accent, $"GCD Slot #{slot}");
                 }
+
+                // Show relation to nearest mechanic
+                var nearestMech = FindNearestMechanic(action.EffectTime);
+                if (nearestMech != null)
+                {
+                    float delta = nearestMech.CombatTime - action.EffectTime;
+                    ImGui.TextColored(GetMechanicColor(nearestMech.Type),
+                        $"{delta:F1}s vor {nearestMech.Type}: {nearestMech.Name}");
+                }
+
                 if (!string.IsNullOrEmpty(action.Comment))
                     ImGui.TextColored(RSRStyle.TextSecondary, action.Comment);
                 ImGui.EndTooltip();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Draw connecting lines between oGCD actions and their nearest relevant mechanic
+    /// </summary>
+    private void DrawMechanicLinks(ImDrawListPtr drawList, Vector2 pos, Vector2 size)
+    {
+        uint linkColor = ImGui.ColorConvertFloat4ToU32(MechanicLinkColor);
+        float ogcdLaneY = pos.Y + MechanicLaneHeight + GCDLaneHeight;
+
+        foreach (var action in _currentPlan.Actions)
+        {
+            if (action.Type != TimelineItemType.OGCD) continue;
+
+            var mech = FindNearestMechanic(action.EffectTime, 15f);
+            if (mech == null) continue;
+
+            float actionX = TimeToX(pos.X, action.EffectTime);
+            float mechX = TimeToX(pos.X, mech.CombatTime);
+
+            // Only draw if both are on screen
+            if (actionX > pos.X + size.X || mechX < pos.X) continue;
+
+            float mechY = pos.Y + 16 + (MechanicLaneHeight - 18) / 2;
+            float actionY = ogcdLaneY + OGCDLaneHeight / 2;
+
+            // Dashed connecting line
+            float dx = mechX - actionX;
+            float dy = mechY - actionY;
+            float len = MathF.Sqrt(dx * dx + dy * dy);
+            if (len < 5) continue;
+
+            float nx = dx / len;
+            float ny = dy / len;
+            for (float d = 0; d < len; d += 6)
+            {
+                float segEnd = Math.Min(d + 3, len);
+                drawList.AddLine(
+                    new Vector2(actionX + nx * d, actionY + ny * d),
+                    new Vector2(actionX + nx * segEnd, actionY + ny * segEnd),
+                    linkColor, 1.5f);
+            }
+
+            // Time delta label at midpoint
+            float delta = mech.CombatTime - action.EffectTime;
+            if (delta > 0.5f)
+            {
+                float midX = (actionX + mechX) / 2;
+                float midY = (actionY + mechY) / 2;
+                string deltaLabel = $"-{delta:F1}s";
+                drawList.AddText(new Vector2(midX - 10, midY - 8), linkColor, deltaLabel);
             }
         }
     }
@@ -917,7 +1148,7 @@ internal class RotationPlannerWindow : Window
         if (!DataCenter.InCombat) return;
 
         float combatTime = DataCenter.CombatTimeRaw;
-        float x = pos.X + combatTime * _pixelsPerSecond - _scrollX;
+        float x = TimeToX(pos.X, combatTime);
         if (x < pos.X || x > pos.X + size.X) return;
 
         drawList.AddLine(
@@ -931,7 +1162,7 @@ internal class RotationPlannerWindow : Window
         float totalDuration = _currentPlan.TotalDuration;
         if (totalDuration <= 0) return;
 
-        float x = pos.X + totalDuration * _pixelsPerSecond - _scrollX;
+        float x = TimeToX(pos.X, totalDuration);
         if (x < pos.X || x > pos.X + size.X) return;
 
         uint deathColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1.0f, 0.2f, 0.2f, 0.9f));
@@ -1012,6 +1243,45 @@ internal class RotationPlannerWindow : Window
     {
         float gcd = GetCurrentGCD();
         return MathF.Round(time / gcd) * gcd;
+    }
+
+    /// <summary>
+    /// Convert a combat time (can be negative for prepull) to a screen X position
+    /// </summary>
+    private float TimeToX(float canvasX, float time)
+    {
+        float precast = _currentPlan.PrecastTime;
+        return canvasX + (time + precast) * _pixelsPerSecond - _scrollX;
+    }
+
+    /// <summary>
+    /// Convert a screen X position back to combat time
+    /// </summary>
+    private float XToTime(float canvasX, float screenX)
+    {
+        float precast = _currentPlan.PrecastTime;
+        return (screenX - canvasX + _scrollX) / _pixelsPerSecond - precast;
+    }
+
+    /// <summary>
+    /// Find the nearest mechanic happening after the given time
+    /// </summary>
+    private TimelineMechanic? FindNearestMechanic(float time, float maxLookahead = 30f)
+    {
+        TimelineMechanic? best = null;
+        float bestDelta = maxLookahead;
+        foreach (var m in _currentPlan.Mechanics)
+        {
+            if (m.Type is not (MechanicType.Raidwide or MechanicType.Tankbuster or MechanicType.SharedStack or MechanicType.Knockback))
+                continue;
+            float delta = m.CombatTime - time;
+            if (delta > 0 && delta < bestDelta)
+            {
+                bestDelta = delta;
+                best = m;
+            }
+        }
+        return best;
     }
 
     private static Vector4 GetMechanicColor(MechanicType type) => type switch
