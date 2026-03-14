@@ -37,7 +37,6 @@ internal class RotationPlannerWindow : Window
     private string _newPlanName = "";
     private string _paletteFilter = "";
     private Guid? _selectedActionId;
-    private uint _dragPayloadActionId;
     private bool _isPanning;
     private float _panStartX;
     private float _panStartScrollX;
@@ -46,6 +45,13 @@ internal class RotationPlannerWindow : Window
     private List<EncounterInfo> _encounters = [];
     private int _selectedEncounterIndex = -1;
     private string _encounterFilter = "";
+
+    // Manual drag state (cross-window drag-drop)
+    private bool _isDraggingFromPalette;
+    private uint _draggingActionId;
+    private uint _draggingIconId;
+    private string _draggingActionName = "";
+    private bool _draggingIsGCD;
 
     // Mechanic colors
     private static readonly Vector4 RaidwideColor = new(0.90f, 0.30f, 0.30f, 0.70f);
@@ -98,6 +104,37 @@ internal class RotationPlannerWindow : Window
         DrawPalette(contentHeight);
         ImGui.SameLine();
         DrawTimelineCanvas(windowSize.X - PaletteWidth - 8, contentHeight);
+
+        // Draw floating drag cursor on foreground
+        if (_isDraggingFromPalette)
+        {
+            var fg = ImGui.GetForegroundDrawList();
+            var mouse = ImGui.GetMousePos();
+            float iconSize = _draggingIsGCD ? GCDIconSize : OGCDIconSize;
+
+            if (IconSet.GetTexture(_draggingIconId, out IDalamudTextureWrap? tex) && tex != null)
+            {
+                fg.AddImage(tex.Handle,
+                    mouse - new Vector2(iconSize / 2, iconSize / 2),
+                    mouse + new Vector2(iconSize / 2, iconSize / 2));
+            }
+            else
+            {
+                fg.AddRectFilled(
+                    mouse - new Vector2(iconSize / 2, iconSize / 2),
+                    mouse + new Vector2(iconSize / 2, iconSize / 2),
+                    RSRStyle.AccentU32, 4f);
+            }
+
+            fg.AddText(mouse + new Vector2(iconSize / 2 + 4, -8),
+                ImGui.ColorConvertFloat4ToU32(RSRStyle.TextPrimary), _draggingActionName);
+
+            // End drag on mouse release
+            if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
+            {
+                _isDraggingFromPalette = false;
+            }
+        }
     }
 
     #region Toolbar
@@ -361,21 +398,19 @@ internal class RotationPlannerWindow : Window
 
             float iconSize = isGCD ? 28 : 24;
 
-            // Draw icon
+            // Draw icon + clickable area
             if (IconSet.GetTexture(action.IconID, out IDalamudTextureWrap? texture) && texture != null)
             {
-                var cursor = ImGui.GetCursorScreenPos();
                 ImGui.Image(texture.Handle, new Vector2(iconSize, iconSize));
 
-                // Drag source
-                if (ImGui.BeginDragDropSource())
+                // Start drag on mouse down + drag
+                if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
                 {
-                    _dragPayloadActionId = action.ID;
-                    ImGui.SetDragDropPayload("PLANNED_ACTION", ReadOnlySpan<byte>.Empty);
-                    ImGui.Image(texture.Handle, new Vector2(32, 32));
-                    ImGui.SameLine();
-                    ImGui.Text(name);
-                    ImGui.EndDragDropSource();
+                    _isDraggingFromPalette = true;
+                    _draggingActionId = action.ID;
+                    _draggingIconId = action.IconID;
+                    _draggingActionName = name;
+                    _draggingIsGCD = actionIsGCD;
                 }
             }
             else
@@ -384,6 +419,15 @@ internal class RotationPlannerWindow : Window
                 var cursor = ImGui.GetCursorScreenPos();
                 ImGui.GetWindowDrawList().AddRectFilled(cursor, cursor + new Vector2(iconSize), ImGui.ColorConvertFloat4ToU32(fallbackColor), 4f);
                 ImGui.Dummy(new Vector2(iconSize, iconSize));
+
+                if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+                {
+                    _isDraggingFromPalette = true;
+                    _draggingActionId = action.ID;
+                    _draggingIconId = 0;
+                    _draggingActionName = name;
+                    _draggingIsGCD = actionIsGCD;
+                }
             }
 
             ImGui.SameLine();
@@ -412,34 +456,23 @@ internal class RotationPlannerWindow : Window
         ImGui.InvisibleButton("##CanvasDrop", canvasSize);
         bool canvasHovered = ImGui.IsItemHovered();
 
-        // Handle drop on the invisible button
-        if (ImGui.BeginDragDropTarget())
+        // Manual drop detection (cross-window drag)
+        if (_isDraggingFromPalette && canvasHovered && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
         {
-            var payload = ImGui.AcceptDragDropPayload("PLANNED_ACTION");
-            if (_dragPayloadActionId != 0)
+            float dropTime = (ImGui.GetMousePos().X - canvasPos.X + _scrollX) / _pixelsPerSecond;
+            dropTime = Math.Max(0, dropTime);
+
+            if (_draggingIsGCD)
             {
-                float dropTime = (ImGui.GetMousePos().X - canvasPos.X + _scrollX) / _pixelsPerSecond;
-                dropTime = Math.Max(0, dropTime);
-
-                // Check if dragged action is GCD
-                var rotation = DataCenter.CurrentRotation;
-                bool isGCD = rotation?.AllBaseActions.FirstOrDefault(a => a.ID == _dragPayloadActionId)?.Info.IsRealGCD ?? false;
-
-                if (isGCD)
-                {
-                    // Snap GCD actions exactly to GCD slot boundaries
-                    dropTime = SnapToGCD(dropTime);
-                }
-                else
-                {
-                    // Snap oGCD to 0.1s precision
-                    dropTime = MathF.Round(dropTime * 10f) / 10f;
-                }
-
-                AddActionToPlan(_dragPayloadActionId, dropTime);
-                _dragPayloadActionId = 0;
+                dropTime = SnapToGCD(dropTime);
             }
-            ImGui.EndDragDropTarget();
+            else
+            {
+                dropTime = MathF.Round(dropTime * 10f) / 10f;
+            }
+
+            AddActionToPlan(_draggingActionId, dropTime);
+            _isDraggingFromPalette = false;
         }
 
         // Handle mouse interactions (zoom, pan, select, context menu)
@@ -452,6 +485,7 @@ internal class RotationPlannerWindow : Window
         DrawGCDLane(drawList, canvasPos, canvasSize);
         DrawOGCDLane(drawList, canvasPos, canvasSize);
         DrawCurrentTimeLine(drawList, canvasPos, canvasSize);
+        DrawBossDeathMarker(drawList, canvasPos, canvasSize);
 
         ImGui.EndChild();
         ImGui.PopStyleColor();
@@ -890,6 +924,29 @@ internal class RotationPlannerWindow : Window
             new Vector2(x, pos.Y),
             new Vector2(x, pos.Y + size.Y),
             RSRStyle.AccentU32, 2f);
+    }
+
+    private void DrawBossDeathMarker(ImDrawListPtr drawList, Vector2 pos, Vector2 size)
+    {
+        float totalDuration = _currentPlan.TotalDuration;
+        if (totalDuration <= 0) return;
+
+        float x = pos.X + totalDuration * _pixelsPerSecond - _scrollX;
+        if (x < pos.X || x > pos.X + size.X) return;
+
+        uint deathColor = ImGui.ColorConvertFloat4ToU32(new Vector4(1.0f, 0.2f, 0.2f, 0.9f));
+        uint deathBg = ImGui.ColorConvertFloat4ToU32(new Vector4(0.8f, 0.1f, 0.1f, 0.25f));
+
+        // Vertical line
+        drawList.AddLine(new Vector2(x, pos.Y), new Vector2(x, pos.Y + size.Y), deathColor, 2.5f);
+
+        // Background shade after death
+        float endX = Math.Min(x + 60, pos.X + size.X);
+        drawList.AddRectFilled(new Vector2(x, pos.Y), new Vector2(endX, pos.Y + size.Y), deathBg);
+
+        // Label
+        string label = $"BOSS DEATH {FormatTime(totalDuration)}";
+        drawList.AddText(new Vector2(x + 4, pos.Y + 4), deathColor, label);
     }
 
     #endregion
