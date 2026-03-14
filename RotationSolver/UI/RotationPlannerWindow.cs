@@ -21,7 +21,8 @@ internal class RotationPlannerWindow : Window
     private const float MinPPS = 2f;
     private const float MaxPPS = 30f;
     private const float PaletteWidth = 200f;
-    private const float ToolbarHeight = 36f;
+    private const float ToolbarHeight = 32f;
+    private const float ToolbarTotalHeight = 68f;
     private const float MechanicLaneHeight = 28f;
     private const float GCDLaneHeight = 48f;
     private const float OGCDLaneHeight = 36f;
@@ -86,7 +87,7 @@ internal class RotationPlannerWindow : Window
         DrawToolbar(windowSize.X);
 
         // Main content: Palette + Timeline
-        var contentHeight = windowSize.Y - ToolbarHeight * 2;
+        var contentHeight = windowSize.Y - ToolbarTotalHeight;
         DrawPalette(contentHeight);
         ImGui.SameLine();
         DrawTimelineCanvas(windowSize.X - PaletteWidth - 8, contentHeight);
@@ -97,16 +98,17 @@ internal class RotationPlannerWindow : Window
     private void DrawToolbar(float width)
     {
         ImGui.PushStyleColor(ImGuiCol.ChildBg, RSRStyle.BgMid);
-        ImGui.BeginChild("##PlannerToolbar", new Vector2(width, ToolbarHeight * 2), false);
+        ImGui.BeginChild("##PlannerToolbar", new Vector2(width, ToolbarTotalHeight), false);
+
+        // --- Row 1: Encounter + Plan selection ---
         ImGui.SetCursorPos(new Vector2(8, 6));
 
-        // --- Row 1: Encounter selection + Plan management ---
-
-        // Encounter dropdown (from BossMod)
         bool bossModAvailable = BossModTimelineProvider.IsAvailable;
+
+        // Encounter dropdown
         ImGui.Text("Encounter:");
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(300);
+        ImGui.SetNextItemWidth(280);
 
         if (!bossModAvailable) ImGui.BeginDisabled();
 
@@ -116,11 +118,11 @@ internal class RotationPlannerWindow : Window
 
         var encounterLabel = _selectedEncounterIndex >= 0 && _selectedEncounterIndex < _encounters.Count
             ? _encounters[_selectedEncounterIndex].DisplayName
-            : "-- Encounter auswaehlen --";
+            : "-- Encounter --";
 
         if (ImGui.BeginCombo("##EncounterSelect", encounterLabel))
         {
-            ImGui.SetNextItemWidth(280);
+            ImGui.SetNextItemWidth(260);
             ImGui.InputTextWithHint("##EncFilter", "Filter...", ref _encounterFilter, 64);
             var filterLower = _encounterFilter.ToLowerInvariant();
 
@@ -134,7 +136,6 @@ internal class RotationPlannerWindow : Window
                     && !enc.Category.ToLowerInvariant().Contains(filterLower))
                     continue;
 
-                // Category header
                 if (enc.Category != lastCategory)
                 {
                     lastCategory = enc.Category;
@@ -156,15 +157,13 @@ internal class RotationPlannerWindow : Window
             ImGui.SetTooltip("BossModReborn nicht geladen");
 
         ImGui.SameLine();
-        ImGui.Spacing();
-        ImGui.SameLine();
 
         // Plan selector
         ImGui.Text("Plan:");
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(200);
+        ImGui.SetNextItemWidth(180);
         var currentPlanName = _selectedPlanIndex >= 0 && _selectedPlanIndex < _allPlans.Count
-            ? _allPlans[_selectedPlanIndex].Name : "-- Plan auswaehlen --";
+            ? _allPlans[_selectedPlanIndex].Name : "-- Plan --";
         if (ImGui.BeginCombo("##PlanSelect", currentPlanName))
         {
             for (int i = 0; i < _allPlans.Count; i++)
@@ -177,20 +176,14 @@ internal class RotationPlannerWindow : Window
                     _selectedPlanIndex = i;
                     _currentPlan = plan;
                     _selectedActionId = null;
-
-                    // Sync encounter selection
                     if (plan.EncounterOID != 0)
-                    {
                         _selectedEncounterIndex = _encounters.FindIndex(e => e.OID == plan.EncounterOID);
-                    }
                 }
             }
             ImGui.EndCombo();
         }
 
         ImGui.SameLine();
-
-        // Active toggle
         if (_selectedPlanIndex >= 0)
         {
             bool isActive = _currentPlan.IsActive;
@@ -201,10 +194,10 @@ internal class RotationPlannerWindow : Window
             }
         }
 
-        // --- Row 2: Actions ---
-        ImGui.SetCursorPos(new Vector2(8, ToolbarHeight + 4));
+        // --- Row 2: Create/Save/Delete + Import + Zoom ---
+        ImGui.SetCursorPos(new Vector2(8, ToolbarHeight + 6));
 
-        ImGui.SetNextItemWidth(160);
+        ImGui.SetNextItemWidth(150);
         ImGui.InputTextWithHint("##NewPlanName", "Plan-Name...", ref _newPlanName, 64);
 
         ImGui.SameLine();
@@ -218,9 +211,7 @@ internal class RotationPlannerWindow : Window
 
         ImGui.SameLine();
         if (ImGui.Button("Speichern") && _currentPlan.Name.Length > 0)
-        {
             RotationPlanStorage.Save(_currentPlan);
-        }
 
         ImGui.SameLine();
         if (ImGui.Button("Loeschen") && _selectedPlanIndex >= 0)
@@ -232,12 +223,8 @@ internal class RotationPlannerWindow : Window
         }
 
         ImGui.SameLine();
-        ImGui.Spacing();
-        ImGui.SameLine();
-
-        // BossMod import for selected encounter
         if (!bossModAvailable) ImGui.BeginDisabled();
-        if (ImGui.Button("BossMod Import"))
+        if (ImGui.Button("Import"))
         {
             if (_selectedEncounterIndex >= 0 && _selectedEncounterIndex < _encounters.Count)
             {
@@ -254,21 +241,19 @@ internal class RotationPlannerWindow : Window
         if (!bossModAvailable) ImGui.EndDisabled();
 
         ImGui.SameLine();
-        if (ImGui.Button("Encounters neu laden") && bossModAvailable)
+        if (!bossModAvailable) ImGui.BeginDisabled();
+        if (ImGui.Button("Reload"))
         {
             BossModTimelineProvider.InvalidateEncounterCache();
             _encounters = BossModTimelineProvider.GetEncounters();
         }
+        if (!bossModAvailable) ImGui.EndDisabled();
 
         ImGui.SameLine();
-        ImGui.Spacing();
-        ImGui.SameLine();
-
-        // Zoom
         ImGui.Text("Zoom:");
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(100);
-        ImGui.SliderFloat("##Zoom", ref _pixelsPerSecond, MinPPS, MaxPPS, "%.0f px/s");
+        ImGui.SetNextItemWidth(80);
+        ImGui.SliderFloat("##Zoom", ref _pixelsPerSecond, MinPPS, MaxPPS, "%.0f");
 
         ImGui.EndChild();
         ImGui.PopStyleColor();

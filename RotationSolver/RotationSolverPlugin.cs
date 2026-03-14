@@ -331,7 +331,21 @@ public sealed class RotationSolverPlugin : IDalamudPlugin, IDisposable
             ActionTimelineManager.Instance.UpdateCombatState();
         }
 
-        _rotationPlannerWindow!.IsOpen = Service.Config.ShowRotationPlannerWindow;
+        // Sync planner window: config controls open, but allow closing via X
+        if (Service.Config.ShowRotationPlannerWindow)
+        {
+            if (!_rotationPlannerWindow!.IsOpen)
+                _rotationPlannerWindow.IsOpen = true;
+        }
+        else
+        {
+            _rotationPlannerWindow!.IsOpen = false;
+        }
+        // If user closed via X, sync config back
+        if (!_rotationPlannerWindow.IsOpen && Service.Config.ShowRotationPlannerWindow)
+        {
+            Service.Config.ShowRotationPlannerWindow.Value = false;
+        }
 
         _overlayWindow!.IsOpen = isValid && Service.Config.TeachingMode;
     }

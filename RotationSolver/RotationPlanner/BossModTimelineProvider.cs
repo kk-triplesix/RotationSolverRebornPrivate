@@ -98,11 +98,22 @@ internal static class BossModTimelineProvider
             return _cachedEncounters;
 
         if (!IsAvailable)
+        {
+            Svc.Log.Information("BossModTimelineProvider.GetEncounters: BossMod not available");
             return [];
+        }
 
         try
         {
-            var json = BossModTimeline_IPCSubscriber.Encounters_GetAll?.Invoke();
+            var func = BossModTimeline_IPCSubscriber.Encounters_GetAll;
+            if (func == null)
+            {
+                Svc.Log.Warning("BossModTimelineProvider.GetEncounters: Encounters.GetAll IPC not available - update BossModReborn");
+                return [];
+            }
+
+            var json = func.Invoke();
+            Svc.Log.Information($"BossModTimelineProvider.GetEncounters: got {json?.Length ?? 0} chars");
             if (string.IsNullOrEmpty(json))
                 return [];
 
@@ -122,7 +133,6 @@ internal static class BossModTimelineProvider
                 });
             }
 
-            // Sort by Category then GroupName then SortOrder
             encounters.Sort((a, b) =>
             {
                 int cmp = string.Compare(a.Category, b.Category, StringComparison.Ordinal);
@@ -132,6 +142,7 @@ internal static class BossModTimelineProvider
                 return a.SortOrder.CompareTo(b.SortOrder);
             });
 
+            Svc.Log.Information($"BossModTimelineProvider.GetEncounters: loaded {encounters.Count} encounters");
             _cachedEncounters = encounters;
             return encounters;
         }
