@@ -63,6 +63,12 @@ internal class RotationPlannerWindow : Window
         SizeCondition = ImGuiCond.FirstUseEver;
     }
 
+    public override void OnClose()
+    {
+        Service.Config.ShowRotationPlannerWindow.Value = false;
+        base.OnClose();
+    }
+
     public override void PreDraw()
     {
         ImGui.PushStyleColor(ImGuiCol.WindowBg, RSRStyle.BgDeep);
@@ -98,34 +104,31 @@ internal class RotationPlannerWindow : Window
     private void DrawToolbar(float width)
     {
         ImGui.PushStyleColor(ImGuiCol.ChildBg, RSRStyle.BgMid);
-        ImGui.BeginChild("##PlannerToolbar", new Vector2(width, ToolbarTotalHeight), false);
-
-        // --- Row 1: Encounter + Plan selection ---
-        ImGui.SetCursorPos(new Vector2(8, 6));
+        ImGui.BeginChild("##PlannerToolbar", new Vector2(width, ToolbarTotalHeight), false, ImGuiWindowFlags.NoScrollbar);
 
         bool bossModAvailable = BossModTimelineProvider.IsAvailable;
-
-        // Encounter dropdown
-        ImGui.Text("Encounter:");
-        ImGui.SameLine();
-        ImGui.SetNextItemWidth(280);
-
-        if (!bossModAvailable) ImGui.BeginDisabled();
 
         // Lazy-load encounters
         if (_encounters.Count == 0 && bossModAvailable)
             _encounters = BossModTimelineProvider.GetEncounters();
 
+        // ===== ROW 1 =====
+        ImGui.BeginChild("##ToolbarRow1", new Vector2(width - 4, ToolbarHeight), false, ImGuiWindowFlags.NoScrollbar);
+        ImGui.SetCursorPos(new Vector2(4, 4));
+
+        // Encounter dropdown
+        if (!bossModAvailable) ImGui.BeginDisabled();
+        ImGui.Text("Encounter:");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(280);
         var encounterLabel = _selectedEncounterIndex >= 0 && _selectedEncounterIndex < _encounters.Count
             ? _encounters[_selectedEncounterIndex].DisplayName
             : "-- Encounter --";
-
         if (ImGui.BeginCombo("##EncounterSelect", encounterLabel))
         {
             ImGui.SetNextItemWidth(260);
             ImGui.InputTextWithHint("##EncFilter", "Filter...", ref _encounterFilter, 64);
             var filterLower = _encounterFilter.ToLowerInvariant();
-
             string lastCategory = "";
             for (int i = 0; i < _encounters.Count; i++)
             {
@@ -135,14 +138,12 @@ internal class RotationPlannerWindow : Window
                     && !enc.GroupName.ToLowerInvariant().Contains(filterLower)
                     && !enc.Category.ToLowerInvariant().Contains(filterLower))
                     continue;
-
                 if (enc.Category != lastCategory)
                 {
                     lastCategory = enc.Category;
                     ImGui.TextColored(RSRStyle.Accent, enc.Category);
                     RSRStyle.ThemedSeparator();
                 }
-
                 bool selected = i == _selectedEncounterIndex;
                 if (ImGui.Selectable($"  {enc.DisplayName}##{i}", selected))
                 {
@@ -156,12 +157,12 @@ internal class RotationPlannerWindow : Window
         if (!bossModAvailable && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("BossModReborn nicht geladen");
 
-        ImGui.SameLine();
+        ImGui.SameLine(0, 16);
 
         // Plan selector
         ImGui.Text("Plan:");
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(180);
+        ImGui.SetNextItemWidth(200);
         var currentPlanName = _selectedPlanIndex >= 0 && _selectedPlanIndex < _allPlans.Count
             ? _allPlans[_selectedPlanIndex].Name : "-- Plan --";
         if (ImGui.BeginCombo("##PlanSelect", currentPlanName))
@@ -183,7 +184,7 @@ internal class RotationPlannerWindow : Window
             ImGui.EndCombo();
         }
 
-        ImGui.SameLine();
+        ImGui.SameLine(0, 16);
         if (_selectedPlanIndex >= 0)
         {
             bool isActive = _currentPlan.IsActive;
@@ -194,8 +195,11 @@ internal class RotationPlannerWindow : Window
             }
         }
 
-        // --- Row 2: Create/Save/Delete + Import + Zoom ---
-        ImGui.SetCursorPos(new Vector2(8, ToolbarHeight + 6));
+        ImGui.EndChild();
+
+        // ===== ROW 2 =====
+        ImGui.BeginChild("##ToolbarRow2", new Vector2(width - 4, ToolbarHeight), false, ImGuiWindowFlags.NoScrollbar);
+        ImGui.SetCursorPos(new Vector2(4, 4));
 
         ImGui.SetNextItemWidth(150);
         ImGui.InputTextWithHint("##NewPlanName", "Plan-Name...", ref _newPlanName, 64);
@@ -222,7 +226,7 @@ internal class RotationPlannerWindow : Window
             _currentPlan = new();
         }
 
-        ImGui.SameLine();
+        ImGui.SameLine(0, 16);
         if (!bossModAvailable) ImGui.BeginDisabled();
         if (ImGui.Button("Import"))
         {
@@ -238,10 +242,7 @@ internal class RotationPlannerWindow : Window
                 BossModTimelineProvider.TryPopulate(_currentPlan);
             }
         }
-        if (!bossModAvailable) ImGui.EndDisabled();
-
         ImGui.SameLine();
-        if (!bossModAvailable) ImGui.BeginDisabled();
         if (ImGui.Button("Reload"))
         {
             BossModTimelineProvider.InvalidateEncounterCache();
@@ -249,13 +250,15 @@ internal class RotationPlannerWindow : Window
         }
         if (!bossModAvailable) ImGui.EndDisabled();
 
-        ImGui.SameLine();
+        ImGui.SameLine(0, 16);
         ImGui.Text("Zoom:");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(80);
         ImGui.SliderFloat("##Zoom", ref _pixelsPerSecond, MinPPS, MaxPPS, "%.0f");
 
         ImGui.EndChild();
+
+        ImGui.EndChild(); // PlannerToolbar
         ImGui.PopStyleColor();
     }
 
