@@ -16,10 +16,10 @@ internal class RotationPlannerWindow : Window
     private const ImGuiWindowFlags BaseFlags = ImGuiWindowFlags.NoScrollbar;
 
     // Timeline display
-    private float _pixelsPerSecond = 8f;
+    private float _pixelsPerSecond = 12f;
     private float _scrollX;
     private const float MinPPS = 2f;
-    private const float MaxPPS = 30f;
+    private const float MaxPPS = 120f;
     private const float PaletteWidth = 200f;
     private const float ToolbarHeight = 32f;
     private const float ToolbarTotalHeight = 68f;
@@ -254,8 +254,8 @@ internal class RotationPlannerWindow : Window
         ImGui.SameLine(0, 16);
         ImGui.Text("Zoom:");
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(80);
-        ImGui.SliderFloat("##Zoom", ref _pixelsPerSecond, MinPPS, MaxPPS, "%.0f");
+        ImGui.SetNextItemWidth(100);
+        ImGui.SliderFloat("##Zoom", ref _pixelsPerSecond, MinPPS, MaxPPS, "%.0f px/s", ImGuiSliderFlags.Logarithmic);
 
         ImGui.EndChild();
 
@@ -421,15 +421,19 @@ internal class RotationPlannerWindow : Window
                 float dropTime = (ImGui.GetMousePos().X - canvasPos.X + _scrollX) / _pixelsPerSecond;
                 dropTime = Math.Max(0, dropTime);
 
-                // Determine lane from Y position
-                float mouseY = ImGui.GetMousePos().Y - canvasPos.Y;
-                bool isGCDLane = mouseY < (MechanicLaneHeight + GCDLaneHeight);
+                // Check if dragged action is GCD
+                var rotation = DataCenter.CurrentRotation;
+                bool isGCD = rotation?.AllBaseActions.FirstOrDefault(a => a.ID == _dragPayloadActionId)?.Info.IsRealGCD ?? false;
 
-                // Snap to GCD slots if dropping in GCD lane
-                float gcdTime = ActionTimelineManager.Instance.GCD;
-                if (isGCDLane && gcdTime > 0)
+                if (isGCD)
                 {
-                    dropTime = MathF.Round(dropTime / gcdTime) * gcdTime;
+                    // Snap GCD actions exactly to GCD slot boundaries
+                    dropTime = SnapToGCD(dropTime);
+                }
+                else
+                {
+                    // Snap oGCD to 0.1s precision
+                    dropTime = MathF.Round(dropTime * 10f) / 10f;
                 }
 
                 AddActionToPlan(_dragPayloadActionId, dropTime);
@@ -460,11 +464,12 @@ internal class RotationPlannerWindow : Window
 
         if (!isHovered) return;
 
-        // Mouse wheel zoom
+        // Mouse wheel zoom (proportional to current zoom level)
         if (io.MouseWheel != 0)
         {
             float oldPPS = _pixelsPerSecond;
-            _pixelsPerSecond = Math.Clamp(_pixelsPerSecond + io.MouseWheel * 1f, MinPPS, MaxPPS);
+            float zoomStep = _pixelsPerSecond * 0.15f;
+            _pixelsPerSecond = Math.Clamp(_pixelsPerSecond + io.MouseWheel * zoomStep, MinPPS, MaxPPS);
 
             // Adjust scroll to keep mouse position stable
             float mouseTime = (mousePos.X - pos.X + _scrollX) / oldPPS;
@@ -601,12 +606,30 @@ internal class RotationPlannerWindow : Window
     private void DrawGrid(ImDrawListPtr drawList, Vector2 pos, Vector2 size, float totalSeconds)
     {
         uint gridColor = RSRStyle.SeparatorU32;
+        uint gridColorMinor = ImGui.ColorConvertFloat4ToU32(RSRStyle.SeparatorColor with { W = 0.15f });
         uint textColor = ImGui.ColorConvertFloat4ToU32(RSRStyle.TextDisabled);
 
-        // Determine grid interval based on zoom
-        int interval = _pixelsPerSecond > 15 ? 5 : _pixelsPerSecond > 8 ? 10 : 30;
+        // Major grid interval based on zoom
+        int majorInterval = _pixelsPerSecond >= 60 ? 5
+            : _pixelsPerSecond >= 30 ? 10
+            : _pixelsPerSecond >= 15 ? 15
+            : _pixelsPerSecond >= 8 ? 30
+            : 60;
 
-        for (float t = 0; t <= totalSeconds; t += interval)
+        // Minor grid (1s lines) when zoomed in enough
+        if (_pixelsPerSecond >= 30)
+        {
+            for (float t = 0; t <= totalSeconds; t += 1f)
+            {
+                if (t % majorInterval == 0) continue;
+                float x = pos.X + t * _pixelsPerSecond - _scrollX;
+                if (x < pos.X || x > pos.X + size.X) continue;
+                drawList.AddLine(new Vector2(x, pos.Y), new Vector2(x, pos.Y + size.Y), gridColorMinor);
+            }
+        }
+
+        // Major grid lines with labels
+        for (float t = 0; t <= totalSeconds; t += majorInterval)
         {
             float x = pos.X + t * _pixelsPerSecond - _scrollX;
             if (x < pos.X || x > pos.X + size.X) continue;
@@ -707,21 +730,66 @@ internal class RotationPlannerWindow : Window
             new Vector2(pos.X + size.X, laneY + GCDLaneHeight),
             ImGui.ColorConvertFloat4ToU32(RSRStyle.BgCard with { W = 0.20f }));
 
-        // Lane label
-        drawList.AddText(new Vector2(pos.X + 4, laneY + 2),
-            ImGui.ColorConvertFloat4ToU32(RSRStyle.TextDisabled), "GCD");
-
-        // Draw GCD slot markers
-        float gcd = ActionTimelineManager.Instance.GCD;
+        // Draw GCD slot boxes
+        float gcd = GetCurrentGCD();
         if (gcd > 0)
         {
-            uint slotColor = ImGui.ColorConvertFloat4ToU32(RSRStyle.SeparatorColor with { W = 0.20f });
-            for (float t = 0; t < _currentPlan.TotalDuration; t += gcd)
+            uint slotColorA = ImGui.ColorConvertFloat4ToU32(new Vector4(0.20f, 0.25f, 0.30f, 0.40f));
+            uint slotColorB = ImGui.ColorConvertFloat4ToU32(new Vector4(0.15f, 0.20f, 0.25f, 0.40f));
+            uint slotBorder = ImGui.ColorConvertFloat4ToU32(RSRStyle.SeparatorColor with { W = 0.50f });
+            uint slotNumColor = ImGui.ColorConvertFloat4ToU32(RSRStyle.TextDisabled with { W = 0.60f });
+
+            float totalDuration = Math.Max(_currentPlan.TotalDuration, 600f);
+            int slotIndex = 0;
+            for (float t = 0; t < totalDuration; t += gcd)
             {
-                float x = pos.X + t * _pixelsPerSecond - _scrollX;
-                if (x < pos.X || x > pos.X + size.X) continue;
-                drawList.AddLine(new Vector2(x, laneY + 14), new Vector2(x, laneY + GCDLaneHeight - 2), slotColor);
+                float x1 = pos.X + t * _pixelsPerSecond - _scrollX;
+                float x2 = pos.X + (t + gcd) * _pixelsPerSecond - _scrollX;
+
+                // Cull off-screen slots
+                if (x2 < pos.X) { slotIndex++; continue; }
+                if (x1 > pos.X + size.X) break;
+
+                // Clamp to canvas
+                float drawX1 = Math.Max(x1, pos.X);
+                float drawX2 = Math.Min(x2, pos.X + size.X);
+
+                // Alternating slot fill
+                uint fillColor = (slotIndex % 2 == 0) ? slotColorA : slotColorB;
+                drawList.AddRectFilled(
+                    new Vector2(drawX1, laneY),
+                    new Vector2(drawX2, laneY + GCDLaneHeight),
+                    fillColor);
+
+                // Slot border (left edge)
+                if (x1 >= pos.X && x1 <= pos.X + size.X)
+                {
+                    drawList.AddLine(
+                        new Vector2(x1, laneY),
+                        new Vector2(x1, laneY + GCDLaneHeight),
+                        slotBorder);
+                }
+
+                // Slot number at top
+                float slotWidth = x2 - x1;
+                if (slotWidth > 16 && x1 >= pos.X - slotWidth)
+                {
+                    string slotLabel = $"{slotIndex + 1}";
+                    drawList.AddText(new Vector2(Math.Max(x1, pos.X) + 2, laneY + 1), slotNumColor, slotLabel);
+                }
+
+                slotIndex++;
             }
+
+            // GCD info label
+            string gcdLabel = $"GCD {gcd:F2}s";
+            drawList.AddText(new Vector2(pos.X + 4, laneY + GCDLaneHeight - 14),
+                ImGui.ColorConvertFloat4ToU32(RSRStyle.TextDisabled), gcdLabel);
+        }
+        else
+        {
+            drawList.AddText(new Vector2(pos.X + 4, laneY + 2),
+                ImGui.ColorConvertFloat4ToU32(RSRStyle.TextDisabled), "GCD (kein GCD-Wert)");
         }
 
         // Draw GCD actions
@@ -796,7 +864,13 @@ internal class RotationPlannerWindow : Window
             {
                 ImGui.BeginTooltip();
                 ImGui.Text(action.ActionName);
-                ImGui.Text($"Time: {FormatTime(action.CombatTime)}");
+                ImGui.Text($"Zeit: {FormatTime(action.CombatTime)}");
+                if (action.Type == TimelineItemType.GCD)
+                {
+                    float gcd = GetCurrentGCD();
+                    int slot = (int)MathF.Round(action.CombatTime / gcd) + 1;
+                    ImGui.TextColored(RSRStyle.Accent, $"GCD Slot #{slot}");
+                }
                 if (!string.IsNullOrEmpty(action.Comment))
                     ImGui.TextColored(RSRStyle.TextSecondary, action.Comment);
                 ImGui.EndTooltip();
@@ -863,6 +937,24 @@ internal class RotationPlannerWindow : Window
         uint territoryId = territory?.Id ?? 0;
         string job = Player.Available ? DataCenter.Job.ToString() : "";
         _allPlans = RotationPlanStorage.LoadAll(territoryId > 0 ? territoryId : null, !string.IsNullOrEmpty(job) ? job : null);
+    }
+
+    /// <summary>
+    /// Get current GCD value with fallback to 2.5s
+    /// </summary>
+    private static float GetCurrentGCD()
+    {
+        float gcd = ActionTimelineManager.Instance.GCD;
+        return gcd > 0 ? gcd : 2.5f;
+    }
+
+    /// <summary>
+    /// Snap a time value to the nearest GCD slot boundary
+    /// </summary>
+    private static float SnapToGCD(float time)
+    {
+        float gcd = GetCurrentGCD();
+        return MathF.Round(time / gcd) * gcd;
     }
 
     private static Vector4 GetMechanicColor(MechanicType type) => type switch
