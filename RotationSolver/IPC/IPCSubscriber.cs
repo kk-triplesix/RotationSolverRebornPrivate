@@ -40,6 +40,38 @@ namespace RotationSolver.IPC
 		internal static void Dispose() => IPCSubscriber_Common.DisposeAll(_disposalTokens);
 	}
 
+	/// <summary>
+	/// IPC subscriber for BossMod Timeline data (fight state machine, phases, mechanics)
+	/// </summary>
+	internal static class BossModTimeline_IPCSubscriber
+	{
+		private static readonly EzIPCDisposalToken[] _disposalTokens = EzIPC.Init(typeof(BossModTimeline_IPCSubscriber), "BossMod", SafeWrapper.AnyException);
+
+		internal static bool IsEnabled => IPCSubscriber_Common.IsReady("BossModReborn");
+
+		// Whether a boss module with an active state machine is currently loaded
+		[EzIPC("Timeline.IsActive", true)] internal static readonly Func<bool> Timeline_IsActive;
+
+		// JSON: { "OID": uint, "Name": string, "TotalDuration": float }
+		[EzIPC("Timeline.GetEncounter", true)] internal static readonly Func<string> Timeline_GetEncounter;
+
+		// JSON: [{ "Name", "StartTime", "Duration", "MaxTime" }]
+		[EzIPC("Timeline.GetPhases", true)] internal static readonly Func<string> Timeline_GetPhases;
+
+		// JSON: [{ "ID", "PhaseID", "Time", "Duration", "Name", "Comment", "IsRaidwide", "IsTankbuster", ... }]
+		[EzIPC("Timeline.GetStates", true)] internal static readonly Func<string> Timeline_GetStates;
+
+		// JSON: [{ "OID", "BossName", "GroupName", "Category", "Expansion", "GroupType", "SortOrder" }]
+		[EzIPC("Encounters.GetAll", true)] internal static readonly Func<string> Encounters_GetAll;
+
+		// Offline timeline data for a specific encounter OID (no active fight needed)
+		[EzIPC("Encounters.GetPhasesForOID", true)] internal static readonly Func<uint, string> Encounters_GetPhasesForOID;
+		[EzIPC("Encounters.GetStatesForOID", true)] internal static readonly Func<uint, string> Encounters_GetStatesForOID;
+		[EzIPC("Encounters.GetTotalDuration", true)] internal static readonly Func<uint, float> Encounters_GetTotalDuration;
+
+		internal static void Dispose() => IPCSubscriber_Common.DisposeAll(_disposalTokens);
+	}
+
 	public static class Wrath_IPCSubscriber
 	{
 		public enum CancellationReason

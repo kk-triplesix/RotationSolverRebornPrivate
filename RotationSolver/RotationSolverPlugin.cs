@@ -32,6 +32,7 @@ public sealed class RotationSolverPlugin : IDalamudPlugin, IDisposable
 	private static InterceptedActionWindow? _interceptedActionWindow;
 	private static CooldownWindow? _cooldownWindow;
     private static ActionTimelineWindow? _actionTimelineWindow;
+    private static RotationPlannerWindow? _rotationPlannerWindow;
     private static WelcomeWindow? _changelogWindow;
     private static OverlayWindow? _overlayWindow;
     private static EasterEggWindow? _easterEggWindow;
@@ -92,6 +93,7 @@ public sealed class RotationSolverPlugin : IDalamudPlugin, IDisposable
 		_interceptedActionWindow = new();
 		_cooldownWindow = new();
         _actionTimelineWindow = new();
+        _rotationPlannerWindow = new();
         _changelogWindow = new();
         _overlayWindow = new();
         _easterEggWindow = new();
@@ -118,6 +120,7 @@ public sealed class RotationSolverPlugin : IDalamudPlugin, IDisposable
 		windowSystem.AddWindow(_interceptedActionWindow);
 		windowSystem.AddWindow(_cooldownWindow);
         windowSystem.AddWindow(_actionTimelineWindow);
+        windowSystem.AddWindow(_rotationPlannerWindow);
         windowSystem.AddWindow(_changelogWindow);
         windowSystem.AddWindow(_overlayWindow);
         windowSystem.AddWindow(_easterEggWindow);
@@ -327,6 +330,8 @@ public sealed class RotationSolverPlugin : IDalamudPlugin, IDisposable
         {
             ActionTimelineManager.Instance.UpdateCombatState();
         }
+
+        _rotationPlannerWindow!.IsOpen = Service.Config.ShowRotationPlannerWindow;
 
         _overlayWindow!.IsOpen = isValid && Service.Config.TeachingMode;
     }
