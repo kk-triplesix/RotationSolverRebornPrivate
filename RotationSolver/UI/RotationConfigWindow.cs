@@ -274,22 +274,7 @@ public partial class RotationConfigWindow : Window
             _showResetPopup = false;
         }
 
-        // Custom padding for this popup only (affects this modal window)
-        using var popupWinPad = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(12, 12) * Scale);
-        using var popupFramePad = ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new Vector2(4, 3) * Scale);
-        using var popupCellPadding = ImRaii.PushStyle(ImGuiStyleVar.CellPadding, new Vector2(4, 2) * Scale);
-        using var popupItemSpacing = ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(8, 4) * Scale);
-        using var popupItemInnerSpacing = ImRaii.PushStyle(ImGuiStyleVar.ItemInnerSpacing, new Vector2(4, 4) * Scale);
-        using var popupIndentSpacing = ImRaii.PushStyle(ImGuiStyleVar.IndentSpacing, 21f * Scale);
-        using var popupScrollbarSize = ImRaii.PushStyle(ImGuiStyleVar.ScrollbarSize, 16f * Scale);
-        using var popupGrabMinSize = ImRaii.PushStyle(ImGuiStyleVar.GrabMinSize, 13f * Scale);
-        using var popupWindowBorderSize = ImRaii.PushStyle(ImGuiStyleVar.WindowBorderSize, 0f * Scale);
-        using var popupChildRounding = ImRaii.PushStyle(ImGuiStyleVar.ChildRounding, 11f * Scale);
-        using var popupFrameRounding = ImRaii.PushStyle(ImGuiStyleVar.FrameRounding, 11f * Scale);
-        using var popupPopupRounding = ImRaii.PushStyle(ImGuiStyleVar.PopupRounding, 11f * Scale);
-        using var popupScrollbarRounding = ImRaii.PushStyle(ImGuiStyleVar.ScrollbarRounding, 11f * Scale);
-        using var popupGrabRounding = ImRaii.PushStyle(ImGuiStyleVar.GrabRounding, 11f * Scale);
-        using var popupTabRounding = ImRaii.PushStyle(ImGuiStyleVar.TabRounding, 11f * Scale);
+        using var popupTheme = RSRStyle.PushTheme(Scale);
         if (ImGui.BeginPopupModal("Reset RSR Plugin Settings"))
         {
             ImGui.Text("Are you sure you want to reset all plugin settings?");
@@ -311,23 +296,7 @@ public partial class RotationConfigWindow : Window
             ImGui.EndPopup();
         }
 
-        // This affects framed widgets and child windows you create below
-        using ImRaii.Style selectableAlign = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0.5f, 0.5f));
-        using var framePad = ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new Vector2(4, 3) * Scale);
-        using var childWinPad = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(12, 12) * Scale);
-        using var frameCellPadding = ImRaii.PushStyle(ImGuiStyleVar.CellPadding, new Vector2(4, 2) * Scale);
-        using var frameItemSpacing = ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(8, 4) * Scale);
-        using var frameItemInnerSpacing = ImRaii.PushStyle(ImGuiStyleVar.ItemInnerSpacing, new Vector2(4, 4) * Scale);
-        using var frameIndentSpacing = ImRaii.PushStyle(ImGuiStyleVar.IndentSpacing, 21f * Scale);
-        using var frameScrollbarSize = ImRaii.PushStyle(ImGuiStyleVar.ScrollbarSize, 16f * Scale);
-        using var frameGrabMinSize = ImRaii.PushStyle(ImGuiStyleVar.GrabMinSize, 13f * Scale);
-        using var frameWindowRounding = ImRaii.PushStyle(ImGuiStyleVar.WindowRounding, 11f * Scale);
-        using var frameChildRounding = ImRaii.PushStyle(ImGuiStyleVar.ChildRounding, 11f * Scale);
-        using var frameFrameRounding = ImRaii.PushStyle(ImGuiStyleVar.FrameRounding, 11f * Scale);
-        using var framePopupRounding = ImRaii.PushStyle(ImGuiStyleVar.PopupRounding, 11f * Scale);
-        using var frameScrollbarRounding = ImRaii.PushStyle(ImGuiStyleVar.ScrollbarRounding, 11f * Scale);
-        using var frameGrabRounding = ImRaii.PushStyle(ImGuiStyleVar.GrabRounding, 11f * Scale);
-        using var frameTabRounding = ImRaii.PushStyle(ImGuiStyleVar.TabRounding, 11f * Scale);
+        using var theme = RSRStyle.PushTheme(Scale);
         try
         {
             using ImRaii.IEndObject table = ImRaii.Table("Rotation Config Table", 2, ImGuiTableFlags.Resizable);
@@ -504,14 +473,14 @@ public partial class RotationConfigWindow : Window
 
     private void DrawSideBar()
     {
+        using var sidebarBg = ImRaii.PushColor(ImGuiCol.ChildBg, RSRStyle.SidebarBg);
         using ImRaii.IEndObject child = ImRaii.Child("Rotation Solver Side bar", -Vector2.One, false, ImGuiWindowFlags.NoScrollbar);
         if (child)
         {
             float wholeWidth = ImGui.GetWindowSize().X;
             DrawHeader(wholeWidth);
             ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
+            RSRStyle.ThemedSeparator();
             float iconSize = Math.Max(Scale * MIN_COLUMN_WIDTH, Math.Min(wholeWidth, Scale * JOB_ICON_WIDTH)) * 0.6f;
             if (wholeWidth > JOB_ICON_WIDTH * Scale)
             {
@@ -575,10 +544,27 @@ public partial class RotationConfigWindow : Window
                 }
                 else
                 {
-                    if (ImGui.Selectable(displayName, _activeTab == item, ImGuiSelectableFlags.None, new Vector2(0, 20)))
+                    bool isActive = _activeTab == item;
+                    float itemHeight = 26 * Scale;
+
+                    // Accent bar for active item
+                    Vector2 itemScreenPos = ImGui.GetCursorScreenPos();
+                    if (isActive)
                     {
-                        _activeTab = item;
-                        _searchResults = [];
+                        RSRStyle.DrawAccentBar(itemScreenPos, itemHeight);
+                    }
+
+                    // Styled selectable
+                    using (ImRaii.PushColor(ImGuiCol.Header, RSRStyle.SidebarActive))
+                    using (ImRaii.PushColor(ImGuiCol.HeaderHovered, RSRStyle.SidebarHover))
+                    using (ImRaii.PushColor(ImGuiCol.Text, isActive ? RSRStyle.Accent : RSRStyle.TextPrimary))
+                    using (ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0.0f, 0.5f)))
+                    {
+                        if (ImGui.Selectable($"  {displayName}", isActive, ImGuiSelectableFlags.None, new Vector2(0, itemHeight)))
+                        {
+                            _activeTab = item;
+                            _searchResults = [];
+                        }
                     }
                     if (ImGui.IsItemHovered())
                     {
@@ -591,22 +577,12 @@ public partial class RotationConfigWindow : Window
                     }
                 }
 
-                // Add a separator after the "Debug" tab
-                if (item == RotationConfigWindowTab.Debug)
+                // Themed separators after specific tabs
+                if (item == RotationConfigWindowTab.Debug
+                    || item == RotationConfigWindowTab.DutyRotation
+                    || item == RotationConfigWindowTab.Main)
                 {
-                    ImGui.Separator();
-                }
-
-                // Add a separator after the "Duty" tab
-                if (item == RotationConfigWindowTab.DutyRotation)
-                {
-                    ImGui.Separator();
-                }
-
-                // Add a separator after the "Main" tab
-                if (item == RotationConfigWindowTab.Main)
-                {
-                    ImGui.Separator();
+                    RSRStyle.ThemedSeparator();
                 }
 			}
             DrawDiagnosticInfoCube();
@@ -994,34 +970,41 @@ public partial class RotationConfigWindow : Window
 			_cachedTipIndex = _hintIndex;
 		}
 
-		using (ImRaii.Font _ = ImRaii.PushFont(FontManager.GetFont(12)))
-		using (ImRaii.Color __ = ImRaii.PushColor(ImGuiCol.Text, ImGui.ColorConvertFloat4ToU32(ImGuiColors.DalamudYellow)))
+		// Subtle hint bar with accent styling
 		{
 			float avail = ImGui.GetContentRegionAvail().X;
-			ImGui.PushTextWrapPos(ImGui.GetCursorPos().X + avail);
+			Vector2 hintPos = ImGui.GetCursorScreenPos();
 
-			ImGui.TextWrapped(_cachedTipText);
-			if (ImGui.IsItemHovered())
+			// Subtle background strip
+			ImGui.GetWindowDrawList().AddRectFilled(
+				hintPos - new Vector2(4, 2),
+				new Vector2(hintPos.X + avail + 4, hintPos.Y + ImGui.GetTextLineHeightWithSpacing() + 6),
+				ImGui.ColorConvertFloat4ToU32(new Vector4(0.14f, 0.14f, 0.17f, 0.80f)),
+				4f);
+
+			// Accent line on top
+			ImGui.GetWindowDrawList().AddLine(
+				hintPos - new Vector2(4, 2),
+				new Vector2(hintPos.X + avail + 4, hintPos.Y - 2),
+				RSRStyle.AccentDimU32);
+
+			using (ImRaii.Font _ = ImRaii.PushFont(FontManager.GetFont(12)))
+			using (ImRaii.Color __ = ImRaii.PushColor(ImGuiCol.Text, RSRStyle.AccentDim))
 			{
-				ImguiTooltips.HoveredTooltip("Right-click to copy this tip.");
-				if (ImGui.IsMouseReleased(ImGuiMouseButton.Right))
+				ImGui.PushTextWrapPos(ImGui.GetCursorPos().X + avail);
+				ImGui.TextWrapped(_cachedTipText);
+				if (ImGui.IsItemHovered())
 				{
-					try
+					ImguiTooltips.HoveredTooltip("Right-click to copy this tip.");
+					if (ImGui.IsMouseReleased(ImGuiMouseButton.Right))
 					{
-						ImGui.SetClipboardText(_cachedTipText);
-					}
-					catch
-					{
-						// ignored
+						try { ImGui.SetClipboardText(_cachedTipText); } catch { }
 					}
 				}
+				ImGui.PopTextWrapPos();
 			}
-
-			ImGui.PopTextWrapPos();
 		}
-		ImGui.Spacing();
-		ImGui.Separator();
-		ImGui.Spacing();
+		ImGui.Dummy(new Vector2(0, 6));
 	}
 
 	private void DrawBody()

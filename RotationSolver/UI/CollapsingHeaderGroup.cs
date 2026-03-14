@@ -1,4 +1,5 @@
-﻿using Dalamud.Interface.Utility.Raii;
+﻿using Dalamud.Interface.Utility;
+using Dalamud.Interface.Utility.Raii;
 using ECommons.Logging;
 
 namespace RotationSolver.UI;
@@ -85,13 +86,42 @@ internal class  CollapsingHeaderGroup(Dictionary<Func<string>, Action> headers)
 
             try
             {
-                ImGui.Spacing();
-                ImGui.Separator();
+                ImGui.Dummy(new Vector2(0, 4));
                 bool selected = index == _openedIndex;
-                bool changed = false;
+
+                // Section header background
+                float scale = ImGuiHelpers.GlobalScale;
+                Vector2 headerPos = ImGui.GetCursorScreenPos();
+                float headerWidth = ImGui.GetContentRegionAvail().X;
+                float headerHeight = (HeaderSize + 8) * scale;
+
+                var drawList = ImGui.GetWindowDrawList();
+                drawList.AddRectFilled(
+                    headerPos,
+                    new Vector2(headerPos.X + headerWidth, headerPos.Y + headerHeight),
+                    selected ? RSRStyle.SectionHeaderBgU32
+                             : ImGui.ColorConvertFloat4ToU32(RSRStyle.SectionHeaderBg with { W = 0.5f }),
+                    4f * scale);
+
+                // Accent bar on left edge for open section
+                if (selected)
+                {
+                    RSRStyle.DrawAccentBar(headerPos, headerHeight);
+                }
+
+                // Chevron indicator
+                string chevron = selected ? "\u25BC " : "\u25B6 ";
+
+                bool changed;
+                using (ImRaii.PushColor(ImGuiCol.Header, Vector4.Zero))
+                using (ImRaii.PushColor(ImGuiCol.HeaderHovered, RSRStyle.SectionHeaderHover))
+                using (ImRaii.PushColor(ImGuiCol.HeaderActive, RSRStyle.SectionHeaderBg))
+                using (ImRaii.PushColor(ImGuiCol.Text, selected ? RSRStyle.Accent : RSRStyle.TextPrimary))
+                using (ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0.0f, 0.5f)))
                 using (ImRaii.Font font = ImRaii.PushFont(FontManager.GetFont(18)))
                 {
-                    changed = ImGui.Selectable(name, selected, ImGuiSelectableFlags.DontClosePopups);
+                    changed = ImGui.Selectable($"   {chevron}{name}", selected, ImGuiSelectableFlags.DontClosePopups,
+                        new Vector2(0, headerHeight));
                 }
 
                 if (ImGui.IsItemHovered())
@@ -104,6 +134,7 @@ internal class  CollapsingHeaderGroup(Dictionary<Func<string>, Action> headers)
                 }
                 if (selected)
                 {
+                    ImGui.Dummy(new Vector2(0, 4));
                     header.Value();
                 }
             }

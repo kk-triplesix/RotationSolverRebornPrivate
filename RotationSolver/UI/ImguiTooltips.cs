@@ -1,4 +1,3 @@
-﻿using Dalamud.Interface.Colors;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Utility.Raii;
 
@@ -20,7 +19,6 @@ internal static class ImguiTooltips
     /// <summary>
     /// Displays a tooltip when the item is hovered.
     /// </summary>
-    /// <param name="text">The text to display in the tooltip.</param>
     public static void HoveredTooltip(string? text)
     {
         if (ImGui.IsItemHovered() && !string.IsNullOrEmpty(text))
@@ -32,7 +30,6 @@ internal static class ImguiTooltips
     /// <summary>
     /// Displays a tooltip with the specified text.
     /// </summary>
-    /// <param name="text">The text to display in the tooltip.</param>
     public static void ShowTooltip(string? text)
     {
         if (!string.IsNullOrEmpty(text))
@@ -44,7 +41,6 @@ internal static class ImguiTooltips
     /// <summary>
     /// Displays a tooltip with the specified action.
     /// </summary>
-    /// <param name="act">The action to perform to render the tooltip content.</param>
     public static void ShowTooltip(Action? act)
     {
         if (act == null || Service.Config.ShowTooltips != true)
@@ -52,11 +48,17 @@ internal static class ImguiTooltips
             return;
         }
 
-        ImGui.SetNextWindowBgAlpha(1);
-
-        using ImRaii.Color color = ImRaii.PushColor(ImGuiCol.BorderShadow, ImGuiColors.DalamudWhite);
-
         float globalScale = ImGuiHelpers.GlobalScale;
+
+        // Dark elegant tooltip styling
+        using var bgCol = ImRaii.PushColor(ImGuiCol.PopupBg, RSRStyle.TooltipBg);
+        using var borderCol = ImRaii.PushColor(ImGuiCol.Border, RSRStyle.TooltipBorder);
+        using var borderShadow = ImRaii.PushColor(ImGuiCol.BorderShadow, Vector4.Zero);
+        using var textCol = ImRaii.PushColor(ImGuiCol.Text, RSRStyle.TextPrimary);
+        using var borderSize = ImRaii.PushStyle(ImGuiStyleVar.WindowBorderSize, 1f);
+        using var rounding = ImRaii.PushStyle(ImGuiStyleVar.WindowRounding, 6f * globalScale);
+        using var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, new Vector2(12, 10) * globalScale);
+
         ImGui.SetNextWindowSizeConstraints(new Vector2(150, 0) * globalScale, new Vector2(1200, 1500) * globalScale);
         ImGui.SetWindowPos(TooltipId, ImGui.GetIO().MousePos);
 
